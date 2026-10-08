@@ -522,7 +522,7 @@ Nomes não vêm do GOWA (`DisplayName` volta vazio): são resolvidos de contatos
 | PUT | `/api/config` | Salva config + atualiza AgentHandler |
 | POST | `/api/config/test-key` | Testa API key no proxy Techify (compatível OpenRouter); auto-salva se válida |
 | POST | `/api/config/request-apikey` | Provisiona uma chave via Techify (manda msg ao número de provisionamento; usado pelo wizard) |
-| GET | `/api/models` | Lista de modelos do proxy (cache 10 min) |
+| GET | `/api/models` | Lista de modelos do proxy (cache 10 min). Busca `/models/user` (já sem os modelos bloqueados nos guardrails da OpenRouter, então editar o bloqueio lá basta) e cai em `/models` se o proxy não expuser essa rota |
 | GET | `/api/balance` | Saldo de crédito atual + threshold + `account_url` (recarga). Updates live via WS `low_balance` |
 | GET | `/api/status` | Status de conexão + contagem de msgs |
 | GET | `/api/qr` | QR code como PNG (204 se indisponível) |

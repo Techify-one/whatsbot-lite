@@ -20,6 +20,12 @@ logger = logging.getLogger(__name__)
 _models_cache: dict[str, Any] = {"data": None, "fetched_at": 0.0}
 _MODELS_CACHE_TTL = 600  # 10 minutes
 
+# `/models/user` lists only the models this account may actually call (the
+# provider's guardrail block list is already applied, so editing that list
+# there is enough to hide a model here). `/models` is the unfiltered catalog,
+# kept as a fallback for proxies that don't expose `/models/user`.
+MODELS_PATHS = ("/models/user", "/models")
+
 
 def get_models_cache() -> dict[str, Any]:
     """Expose models cache for pricing lookup."""
@@ -173,10 +179,19 @@ def register_routes(app, deps):
         api_key = settings.get("openrouter_api_key", "")
         headers = {"Authorization": f"Bearer {api_key}"} if api_key else {}
         try:
+            raw = None
             async with httpx.AsyncClient(timeout=15) as client:
-                resp = await client.get(f"{LLM_API_BASE_URL}/models", headers=headers)
-                resp.raise_for_status()
-                raw = resp.json()
+                for i, path in enumerate(MODELS_PATHS):
+                    try:
+                        resp = await client.get(f"{LLM_API_BASE_URL}{path}", headers=headers)
+                        resp.raise_for_status()
+                        raw = resp.json()
+                        break
+                    except Exception:
+                        if i == len(MODELS_PATHS) - 1:
+                            raise
+                        logger.warning("Model list %s unavailable, falling back to %s",
+                                       path, MODELS_PATHS[i + 1])
             models = []
             for m in raw.get("data", []):
                 arch = m.get("architecture", {})
