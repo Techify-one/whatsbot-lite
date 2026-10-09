@@ -1,6 +1,7 @@
 import { h, render } from 'preact';
 import { useState, useEffect, useCallback, useRef } from 'preact/hooks';
 import htm from 'htm';
+import { InstallApp } from './components/InstallApp.js';
 import { Dashboard } from './components/Dashboard.js';
 import { Sandbox } from './components/Sandbox.js';
 import { Contacts } from './components/Contacts.js';
@@ -214,6 +215,7 @@ function GearMenu({ tab, onTabChange, pluginScreens, hasPassword, onLogout, acco
           >Gerenciar Plugins</${MenuItem}>
 
           <div class="border-t border-wa-border my-1"></div>
+          <${InstallApp} />
           <button
             onClick=${toggleDark}
             class="w-full text-left px-4 py-2.5 text-[14px] hover:bg-wa-hover transition-colors flex items-center gap-2 text-wa-text"

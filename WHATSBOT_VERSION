@@ -1,6 +1,10 @@
 {
-  "version": "0.2.9",
+  "version": "0.2.10",
   "changelog": [
+    {
+      "version": "0.2.10",
+      "description": "- Instale o WhatsBot-Lite na tela inicial do Android ou iPhone usando o endereço HTTPS do seu painel\n- Novo guia Instalar no celular no menu da engrenagem, com instalação pelo navegador quando disponível\n- Ícone próprio e abertura como aplicativo; tela de conexão indisponível sem guardar conversas, credenciais ou respostas da API no cache do PWA\n- O servidor continua necessário e a atualização da instalação é manual"
+    },
     {
       "version": "0.2.9",
       "description": "- A IA agora aproveita melhor o cache do modelo: conversas com instruções longas ficam bem mais baratas e rápidas depois da primeira mensagem\n- A tela Custos mostra quanto do texto enviado à IA foi reaproveitado do cache e a economia estimada, inclusive por contato\n- O valor passou a se chamar \"Custo estimado\" e já considera o desconto do cache; o valor cobrado pelo provedor pode variar um pouco\n- Períodos anteriores a esta versão aparecem sem dado de cache (\"—\") e não entram na porcentagem\n- Plugins podem agora adicionar botões no cabeçalho da conversa (nova API de plugins 1.3); instalações sem plugins não mudam"

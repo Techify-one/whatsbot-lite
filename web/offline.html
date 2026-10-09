@@ -1,0 +1,29 @@
+<!DOCTYPE html>
+<html lang="pt-BR">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <meta name="theme-color" content="#111b21">
+  <meta name="color-scheme" content="light dark">
+  <title>Sem conexão · WhatsBot-Lite</title>
+  <style>
+    :root { color-scheme: light dark; font-family: system-ui, sans-serif; background: #f0f2f5; color: #111b21; }
+    body { margin: 0; min-height: 100vh; display: grid; place-items: center; }
+    main { max-width: 28rem; padding: 2rem; text-align: center; }
+    h1 { font-size: 1.75rem; line-height: 1.2; }
+    p { line-height: 1.65; }
+    button { margin-top: 1rem; padding: .85rem 1.25rem; border: 0; border-radius: .65rem; background: #007c67; color: #fff; font: inherit; font-weight: 600; cursor: pointer; }
+    button:focus-visible { outline: 3px solid #008f7b; outline-offset: 4px; }
+    @media (prefers-color-scheme: dark) { :root { background: #111b21; color: #e9edef; } }
+  </style>
+</head>
+<body>
+  <main>
+    <p aria-hidden="true">WhatsBot-Lite</p>
+    <h1>Não foi possível conectar</h1>
+    <p>Verifique sua conexão e se o servidor do WhatsBot-Lite está disponível.</p>
+    <p>As conversas e os recursos do painel precisam de conexão. Esta tela não armazena mensagens para uso offline.</p>
+    <button type="button" onclick="window.location.reload()">Tentar novamente</button>
+  </main>
+</body>
+</html>

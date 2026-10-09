@@ -287,3 +287,21 @@ Projeto de código aberto. Livre para uso pessoal e comercial.
 ---
 
 Mantido por [Techify](https://github.com/Techify-one) — leia mais em [techify.one/blog](https://techify.one/blog).
+
+## Instalação no celular (PWA)
+
+O painel pode ser instalado na tela inicial de Android e iPhone. Use o endereço
+**HTTPS** da sua instalação (certificado válido e acessível pelo celular):
+
+- Android/Chrome: engrenagem → **Instalar no celular** → **Instalar agora**, quando
+  disponível; alternativamente, menu do Chrome → **Instalar app**.
+- iPhone/iPad/Safari: **Compartilhar → Adicionar à Tela de Início**. Ative **Abrir
+  como App da Web** quando essa opção aparecer e confirme **Adicionar**.
+
+O servidor Python/GOWA continua necessário. Não há WhatsApp offline, sincronização
+em segundo plano nem novas notificações push com o app fechado. Uma nova abertura
+sem rede mostra apenas uma página genérica; o service worker não guarda conversas,
+mídias, credenciais ou respostas da API. O armazenamento de login existente não
+foi alterado; a instalação no iOS pode pedir novo login.
+
+Detalhes de implantação, atualização e validação: [docs/PWA.md](docs/PWA.md).

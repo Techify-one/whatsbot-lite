@@ -13,6 +13,7 @@ from fastapi.staticfiles import StaticFiles
 
 from server.auth import auth_required, verify_token
 from server.helpers import _get_web_dir
+from server.pwa import register_pwa_routes
 from server.state import MemoryLogHandler, ConnectionManager, AppState
 from server.background import start_gowa_task, status_poll_loop, qr_poll_loop, avatar_fetch_task, gowa_update_check_loop
 from server.routes import logs, sandbox, config, whatsapp, websocket, usage, contacts, webhook, auth, tags, executions, update, setup as setup_routes, plugins as plugins_routes, tools as tools_routes, admin as admin_routes, ai_engine as ai_engine_routes, gowa_update as gowa_update_routes, chat as chat_routes
@@ -291,6 +292,8 @@ def create_app(
     @app.get("/health")
     async def healthcheck():
         return JSONResponse({"ok": True})
+
+    register_pwa_routes(app, web_dir)
 
     # ── Frontend routes ────────────────────────────────────────────────
 
