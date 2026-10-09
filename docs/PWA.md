@@ -34,10 +34,9 @@ WhatsBot-Lite e abra novamente. Recursos e telas normais continuam vindo da rede
    privado pode aparecer.
 6. Teste cancelamento, cliques repetidos, Fechar/Escape, modo escuro e logout.
 
-## Pacote 0.2.10 preparado sem deploy
+## Atualização para 0.2.10
 
-Este pacote contém código-fonte e a versão em `WHATSBOT_VERSION`. Não é um EXE novo,
-e não foi aplicado automaticamente a nenhuma instalação. Faça backup dos dados
+Este pacote contém código-fonte e a versão em `WHATSBOT_VERSION`. Não é um EXE novo. Faça backup dos dados
 antes de atualizar. Para instalação a partir de fonte, pare o app, substitua apenas
 os arquivos de código e preserve `storages/`, `statics/`, `logs/`, `venv/`, `.git/`,
 `bin/` e `.env`; depois use seu launcher habitual. Se usa Docker/Coolify, reconstrua
@@ -46,3 +45,7 @@ a imagem pelo fluxo administrado da sua instalação, somente quando quiser atua
 O botão de atualização do painel só detecta uma versão depois de uma release/tag
 ser publicada no repositório configurado. Este ZIP local, sozinho, não a publica.
 Não envie `main` para publicar esta versão sem verificar o deploy automático do Coolify.
+
+O nome atual do repositório é `Techify-one/whatsbot-lite` (anteriormente
+`Techify-one/whatsbot`). O atualizador usa esse endereço diretamente para consultar
+a última release estável e baixar o ZIP da tag. Publicar apenas main não basta.

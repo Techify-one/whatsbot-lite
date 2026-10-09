@@ -1,7 +1,8 @@
 # WhatsBot-Lite 0.2.10 — PWA
 
 Versão preparada a partir do commit 43f0415e6c95d7e6d736d09a1bb7ab0334ee67ce,
-sem publicar no GitHub, alterar produção ou atualizar sua instalação.
+com suporte à instalação PWA. A publicação do código e da release não altera
+por si só uma instalação manual; ambientes com deploy automático podem atualizar.
 
 ## O que mudou
 
@@ -33,8 +34,8 @@ GOWA que você já usa; não substitua esse binário para instalar o recurso PWA
 Se usa Docker/Coolify, atualize o código e reconstrua a imagem pelo processo
 administrado da sua instalação quando desejar. Confirme branch/gatilhos antes de
 fazer push: o projeto documenta deploy automático. Não aplique este ZIP sobre um
-container ativo. O ZIP não cria release/tag; sozinho não faz a nova versão aparecer
-no botão de atualização do painel.
+container ativo. O ZIP sozinho não cria release/tag. A versão aparece no botão de atualização
+do painel depois que a release v0.2.10 for publicada no GitHub.
 
 ## Instalar no celular
 
@@ -55,6 +56,8 @@ ou novas notificações push com o app fechado. A instalação pode pedir novo l
 - 14 testes Node aprovados: ciclo do prompt, cancelamento, clique repetido,
   falhas de registro, contexto seguro, standalone/iPad e política do worker.
 - 4 testes FastAPI isolados aprovados: rotas, MIME/cabeçalhos e contrato de integração.
+- 2 testes da origem direta das releases e 5 testes offline do publicador aprovados
+  (25 verificações focadas no total; publicação simulada sem acesso à rede).
 - Verificação de sintaxe dos arquivos JS modificados, compilação dos módulos Python
   modificados, revisão independente de privacidade/autenticação e git diff --check.
 
@@ -70,3 +73,12 @@ ou novas notificações push com o app fechado. A instalação pode pedir novo l
 
 Consulte `codigo-fonte/docs/PWA.md` para a lista completa de verificação e o
 relatório de validação no pacote. O patch aplica-se somente ao baseline indicado.
+
+## Repositório e atualização pelo painel
+
+O repositório foi renomeado de `Techify-one/whatsbot` para
+`Techify-one/whatsbot-lite`; não são dois projetos distintos. O atualizador passa a
+usar o endereço atual diretamente. A consulta usa a última release estável e baixa
+o ZIP da tag dessa release, nunca o conteúdo de main. Depois da publicação da
+release, confira **Painel → Sistema → Atualizar WhatsBot-Lite**. A consulta pode
+ficar em cache por cinco minutos.

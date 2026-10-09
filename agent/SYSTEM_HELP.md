@@ -293,3 +293,10 @@ Pesquise nesta ordem:
 4. A estrutura e as migrations do banco, quando forem necessárias para confirmar o comportamento.
 
 Não leia nem revele registros de conversas, contatos, credenciais ou outros dados privados. Depois da pesquisa, traduza a descoberta para passos simples e inclua o link direto disponível.
+
+### Origem das atualizações
+
+O repositório WhatsBot foi renomeado para WhatsBot-Lite. O atualizador consulta
+diretamente a última release estável de `Techify-one/whatsbot-lite`, não a branch
+main. Depois que uma nova release é publicada, ela pode levar até cinco minutos
+para aparecer devido ao cache da consulta. Abra [Atualizar WhatsBot-Lite]({{base_url}}/painel?aba=sistema#update).

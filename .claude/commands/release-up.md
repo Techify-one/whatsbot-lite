@@ -18,7 +18,7 @@ Crie uma nova release do WhatsBot-Lite no GitHub seguindo estes passos:
    ```
    Esse arquivo viaja dentro do zip da tag — é ele que o botão "Atualizar" do painel usa para saber a versão instalada e é também o fallback do changelog quando a API do GitHub atinge o limite. O aviso de nova versão compara esse número com a última release e guarda as escolhas do usuário no banco da instalação. **Sempre bumpe `version` junto com a tag**, senão o self-update e o aviso deixam de refletir a versão real.
 6. Faça commit de `WHATSBOT_VERSION` junto com qualquer outra mudança pendente (git add + commit com mensagem descritiva, ex: `chore(release): bump WHATSBOT_VERSION para {nova_versão}`)
-7. Push para origin e upstream na branch main
+7. Push para origin na branch main de `Techify-one/whatsbot-lite` (nome atual do repositório; não publicar em outro remote)
 8. Crie a release no GitHub via `gh release create`, apontando para o commit que acabou de subir (que já contém o `WHATSBOT_VERSION` bumpado):
    ```bash
    gh release create v{nova_versão} --title "v{nova_versão}" --notes "## O que mudou

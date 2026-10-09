@@ -17,7 +17,7 @@ from server.helpers import _ok, _err
 
 logger = logging.getLogger(__name__)
 
-GITHUB_REPO = "Techify-one/whatsbot"
+GITHUB_REPO = "Techify-one/whatsbot-lite"
 GITHUB_RELEASES_API = f"https://api.github.com/repos/{GITHUB_REPO}/releases/latest"
 GITHUB_LATEST_RELEASE_URL = f"https://github.com/{GITHUB_REPO}/releases/latest"
 GITHUB_RAW_VERSION_URL_TEMPLATE = f"https://raw.githubusercontent.com/{GITHUB_REPO}/{{tag}}/WHATSBOT_VERSION"

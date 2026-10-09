@@ -3,7 +3,7 @@
   "changelog": [
     {
       "version": "0.2.10",
-      "description": "- Instale o WhatsBot-Lite na tela inicial do Android ou iPhone usando o endereço HTTPS do seu painel\n- Novo guia Instalar no celular no menu da engrenagem, com instalação pelo navegador quando disponível\n- Ícone próprio e abertura como aplicativo; tela de conexão indisponível sem guardar conversas, credenciais ou respostas da API no cache do PWA\n- O servidor continua necessário e a atualização da instalação é manual"
+      "description": "- Instale o WhatsBot-Lite na tela inicial do Android ou iPhone usando o endereço HTTPS do seu painel\n- Novo guia Instalar no celular no menu da engrenagem, com instalação pelo navegador quando disponível\n- Ícone próprio e abertura como aplicativo; tela de conexão indisponível sem guardar conversas, credenciais ou respostas da API no cache do PWA\n- O servidor continua necessário e a atualização da instalação é manual\n- O atualizador consulta diretamente o endereço atual do repositório WhatsBot-Lite"
     },
     {
       "version": "0.2.9",
