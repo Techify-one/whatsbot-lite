@@ -37,6 +37,8 @@ const PANEL_TARGET_TABS = {
   'image-transcription': 'models',
   'document-transcription': 'models',
   'audio-transcription': 'models',
+  'download-midia': 'models',
+  'media-autodownload': 'models',
   sistema: 'system',
   advanced: 'system',
   'max-executions': 'system',
@@ -82,6 +84,21 @@ function Section({ id, title, active = true, children }) {
   `;
 }
 
+// Rows of the auto-download matrix. Stickers share the "Fotos" row.
+const MEDIA_ROWS = [
+  { id: 'audio', label: 'Áudios', icon: '🎧' },
+  { id: 'image', label: 'Fotos e figurinhas', icon: '🖼️' },
+  { id: 'video', label: 'Vídeos', icon: '🎬' },
+  { id: 'document', label: 'Documentos', icon: '📄' },
+];
+
+const DEFAULT_AUTODOWNLOAD = {
+  audio: { individual: true, group: true },
+  image: { individual: false, group: false },
+  video: { individual: false, group: false },
+  document: { individual: false, group: false },
+};
+
 export function ConfigPanel({ config, saving, onSave, onNotify }) {
   const [activeTab, setActiveTab] = useState(panelTabFromLocation);
   const [apiKey, setApiKey] = useState('');
@@ -111,6 +128,7 @@ export function ConfigPanel({ config, saving, onSave, onNotify }) {
   const [markingAllRead, setMarkingAllRead] = useState(false);
   const [defaultAiEnabled, setDefaultAiEnabled] = useState(true);
   const [groupReplyMode, setGroupReplyMode] = useState('mention_only');
+  const [mediaAutodownload, setMediaAutodownload] = useState(DEFAULT_AUTODOWNLOAD);
   const [testing, setTesting] = useState(false);
   const [webPassword, setWebPassword] = useState('');
   const [webPasswordConfirm, setWebPasswordConfirm] = useState('');
@@ -168,6 +186,7 @@ export function ConfigPanel({ config, saving, onSave, onNotify }) {
       setMaxExecutions(config.max_executions ?? 200);
       setDefaultAiEnabled(config.default_ai_enabled ?? true);
       setGroupReplyMode(config.group_reply_mode ?? 'mention_only');
+      setMediaAutodownload({ ...DEFAULT_AUTODOWNLOAD, ...(config.media_autodownload || {}) });
     }
   }, [config]);
 
@@ -311,6 +330,7 @@ export function ConfigPanel({ config, saving, onSave, onNotify }) {
       max_executions: parseInt(maxExecutions, 10) || 200,
       default_ai_enabled: defaultAiEnabled,
       group_reply_mode: groupReplyMode,
+      media_autodownload: mediaAutodownload,
     };
     // Only include api_key if user typed a new one
     if (apiKey.trim()) {
@@ -553,6 +573,52 @@ export function ConfigPanel({ config, saving, onSave, onNotify }) {
             </div>
           ` : null}
         </div>
+      <//>
+
+      <!-- Section: Download automático de mídia -->
+      <${Section} id="download-midia" title="Download automático de mídia" active=${activeTab === 'models'}>
+        <p class="text-xs text-wa-secondary -mt-1">
+          Escolha quais arquivos recebidos o WhatsBot guarda no seu espaço. O que ficar desligado
+          aparece na conversa como “não baixado”, com um botão para tentar baixar depois, e a IA
+          ainda descreve ou transcreve o conteúdo antes de o arquivo ser descartado.
+          Desligar economiza espaço, principalmente em grupos movimentados.
+        </p>
+        <div class="overflow-x-auto rounded-lg border border-wa-border">
+          <table class="w-full text-sm">
+            <thead>
+              <tr class="bg-wa-panel text-left text-xs uppercase tracking-wider text-wa-secondary">
+                <th class="px-3 py-2 font-semibold">Tipo de arquivo</th>
+                <th class="px-3 py-2 font-semibold text-center">Conversas individuais</th>
+                <th class="px-3 py-2 font-semibold text-center">Grupos</th>
+              </tr>
+            </thead>
+            <tbody>
+              ${MEDIA_ROWS.map((row) => html`
+                <tr key=${row.id} class="border-t border-wa-border">
+                  <td class="px-3 py-2.5 text-wa-text"><span aria-hidden="true">${row.icon}</span> ${row.label}</td>
+                  ${['individual', 'group'].map((scope) => html`
+                    <td class="px-3 py-2.5 text-center">
+                      <label class="inline-flex items-center justify-center cursor-pointer p-1">
+                        <input
+                          type="checkbox"
+                          checked=${!!(mediaAutodownload[row.id] && mediaAutodownload[row.id][scope])}
+                          onChange=${(e) => {
+                            const checked = e.target.checked;
+                            setMediaAutodownload((prev) => ({ ...prev, [row.id]: { ...prev[row.id], [scope]: checked } }));
+                          }}
+                          class="w-4 h-4 rounded border-wa-border accent-wa-teal"
+                          aria-label=${`Baixar ${row.label.toLowerCase()} ${scope === 'group' ? 'de grupos' : 'de conversas individuais'} automaticamente`}
+                        />
+                      </label>
+                    </td>`)}
+                </tr>`)}
+            </tbody>
+          </table>
+        </div>
+        <p class="text-xs text-wa-secondary">
+          Para ver e apagar o que já está guardado, abra${' '}
+          <a href="/arquivos" class="text-wa-teal underline">Arquivos</a>.
+        </p>
       <//>
 
       <!-- Section: Comportamento da IA -->

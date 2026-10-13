@@ -10,6 +10,7 @@ import { LoginScreen } from './components/LoginScreen.js';
 import { PluginsManager } from './components/PluginsManager.js';
 import { PluginScreen } from './components/PluginScreen.js';
 import { ToolsManager } from './components/ToolsManager.js';
+import { FileManager } from './components/FileManager.js';
 import { Chat } from './components/Chat.js';
 import { SetupWizard } from './components/SetupWizard.js';
 import { LowBalanceModal } from './components/LowBalanceModal.js';
@@ -62,6 +63,7 @@ const CORE_ROUTES = {
   '/executions': 'executions',
   '/plugins': 'plugins',
   '/tools': 'tools',
+  '/arquivos': 'files',
   '/chat': 'chat',
 };
 const CORE_TAB_PATHS = {
@@ -72,6 +74,7 @@ const CORE_TAB_PATHS = {
   executions: '/executions',
   plugins: '/plugins',
   tools: '/tools',
+  files: '/arquivos',
   chat: '/chat',
 };
 
@@ -205,6 +208,9 @@ function GearMenu({ tab, onTabChange, pluginScreens, hasPassword, onLogout, acco
               Saldo e Recargar
             </a>
           ` : null}
+          <${MenuItem} active=${tab === 'files'} href=${CORE_TAB_PATHS.files} onClick=${() => { onTabChange('files'); close(); }}
+            icon=${html`<svg viewBox="0 0 24 24" width="18" height="18" fill="currentColor"><path d="M10 4H4c-1.1 0-1.99.9-1.99 2L2 18c0 1.1.9 2 2 2h16c1.1 0 2-.9 2-2V8c0-1.1-.9-2-2-2h-8l-2-2z"/></svg>`}
+          >Arquivos</${MenuItem}>
           <${MenuItem} active=${tab === 'tools'} href=${CORE_TAB_PATHS.tools} onClick=${() => { onTabChange('tools'); close(); }}
             icon=${html`<svg viewBox="0 0 24 24" width="18" height="18" fill="currentColor"><path d="M22.7 19l-9.1-9.1c.9-2.3.4-5-1.5-6.9-2-2-5-2.4-7.4-1.3L9 6 6 9 1.6 4.7C.4 7.1.9 10.1 2.9 12.1c1.9 1.9 4.6 2.4 6.9 1.5l9.1 9.1c.4.4 1 .4 1.4 0l2.3-2.3c.5-.4.5-1.1.1-1.4z"/></svg>`}
           >Gerenciar Tools</${MenuItem}>
@@ -277,6 +283,7 @@ function App({ onLogout, hasPassword }) {
   const [messageStatus, setMessageStatus] = useState(null);
   const [messageAction, setMessageAction] = useState(null);
   const [messageReaction, setMessageReaction] = useState(null);
+  const [mediaUpdated, setMediaUpdated] = useState(null);
   const [avatarUpdated, setAvatarUpdated] = useState(null);
   const [groupParticipantsChanged, setGroupParticipantsChanged] = useState(null);
   const [lowBalance, setLowBalance] = useState(null);
@@ -453,6 +460,7 @@ function App({ onLogout, hasPassword }) {
     onMessageStatus: useCallback((data) => setMessageStatus(data), []),
     onMessageAction: useCallback((data) => setMessageAction(data), []),
     onMessageReaction: useCallback((data) => setMessageReaction(data), []),
+    onMediaUpdated: useCallback((data) => setMediaUpdated(data), []),
     onAvatarUpdated: useCallback((data) => setAvatarUpdated(data), []),
     onGroupParticipantsChanged: useCallback((data) => setGroupParticipantsChanged({ ...data, _t: Date.now() }), []),
     onLowBalance: useCallback((data) => {
@@ -662,6 +670,11 @@ function App({ onLogout, hasPassword }) {
                 <${PageHeader} title="Tools" onBack=${() => setTab('contacts')} />
                 <${ToolsManager} />
               </div>`
+          : tab === 'files'
+            ? html`<div class="max-w-6xl mx-auto p-4">
+                <${PageHeader} title="Arquivos" onBack=${() => setTab('contacts')} />
+                <${FileManager} />
+              </div>`
             : tab === 'chat'
               ? html`<div class="h-full pt-12 md:p-3 md:pt-3"><${Chat} /></div>`
             : tab === 'plugins'
@@ -695,7 +708,7 @@ function App({ onLogout, hasPassword }) {
                   />
                 </div>`
               : tab === 'contacts'
-                ? html`<${Contacts} newMessage=${newMessage} chatPresence=${chatPresence} contactInfoUpdated=${contactInfoUpdated} tagsChanged=${tagsChanged} contactTagsUpdated=${contactTagsUpdated} contactAiToggled=${contactAiToggled} messagesRead=${messagesRead} messageStatus=${messageStatus} messageAction=${messageAction} messageReaction=${messageReaction} avatarUpdated=${avatarUpdated} groupParticipantsChanged=${groupParticipantsChanged} initialContactId=${initialContactId} wsConnected=${wsConnected} config=${config} onConfigSave=${save} onUnreadChange=${refreshUnreadCount} />`
+                ? html`<${Contacts} newMessage=${newMessage} chatPresence=${chatPresence} contactInfoUpdated=${contactInfoUpdated} tagsChanged=${tagsChanged} contactTagsUpdated=${contactTagsUpdated} contactAiToggled=${contactAiToggled} messagesRead=${messagesRead} messageStatus=${messageStatus} messageAction=${messageAction} messageReaction=${messageReaction} mediaUpdated=${mediaUpdated} avatarUpdated=${avatarUpdated} groupParticipantsChanged=${groupParticipantsChanged} initialContactId=${initialContactId} wsConnected=${wsConnected} config=${config} onConfigSave=${save} onUnreadChange=${refreshUnreadCount} />`
                 : tab === 'costs'
                   ? html`<div class="max-w-5xl mx-auto p-4">
                       <${PageHeader} title="Custos de IA" onBack=${() => setTab('contacts')} />

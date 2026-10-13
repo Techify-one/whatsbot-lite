@@ -70,6 +70,8 @@ _ENV_OVERRIDES: dict[str, tuple[str, Callable[[str], Any]]] = {
     "WHATSBOT_BATCH_DELAY": ("message_batch_delay", float),
     "WHATSBOT_AI_ENGINE": ("ai_engine_enabled", lambda v: v.lower() in ("1", "true", "yes")),
     "WHATSBOT_GOWA_AUTO_CHECK": ("gowa_auto_check_enabled", lambda v: v.lower() in ("1", "true", "yes")),
+    # Hosting sets this to cap an instance; it wins over the value saved in the panel.
+    "WHATSBOT_DISK_LIMIT_GB": ("disk_limit_gb", float),
 }
 
 # Reverse lookup: config_key -> (env_key, cast). Used by get() to apply env overrides on-demand.
@@ -112,6 +114,20 @@ DEFAULT_CONFIG = {
     "transfer_alert_enabled": True,
     "transfer_alert_duration": 5,
     "group_reply_mode": "mention_only",
+    # --- Download automático de mídia recebida ---------------------------------
+    # O GOWA continua baixando tudo (só tem liga/desliga geral); o app descarta o
+    # arquivo que esta matriz não permite. Figurinha segue a linha "image".
+    # Padrão enxuto para todos: só áudio fica. Ver server/media_policy.py.
+    "media_autodownload": {
+        "audio": {"individual": True, "group": True},
+        "image": {"individual": False, "group": False},
+        "video": {"individual": False, "group": False},
+        "document": {"individual": False, "group": False},
+    },
+    # Limite de espaço para a barra de uso do gerenciador de arquivos. 0 = sem
+    # limite (a tela mostra só o total usado). Override por env
+    # ``WHATSBOT_DISK_LIMIT_GB`` (hospedagem), que trava o campo na tela.
+    "disk_limit_gb": 0.0,
     # --- Motor de agente dirigido pelo banco (config-in-DB + code-in-DB) -----
     # Quando ``ai_engine_enabled`` é True, prompt/modelo/tools do agente são
     # lidos do banco (tabelas ``ai_*``) em vez das constantes do AgentHandler,

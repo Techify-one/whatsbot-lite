@@ -615,6 +615,63 @@ class GOWAClient:
                 return results
         return []
 
+    def download_media(self, msg_id: str, phone: str) -> dict:
+        """Ask GOWA to (re)download a received media file from WhatsApp.
+
+        Uses ``GET /message/{id}/download?phone=``: GOWA reads the stored
+        ``directPath``/``mediaKey`` and fetches the file into its media folder.
+        There is no media-retry, so a file WhatsApp no longer holds fails.
+
+        Returns ``{"file_path": str, "filename": str, "file_size": int}``.
+        Raises :class:`GOWASendError` with ``error_type`` ``"expired"`` when the
+        file is gone from WhatsApp, ``"network"`` when GOWA is unreachable and
+        ``"api"`` otherwise.
+        """
+        if not msg_id:
+            raise GOWASendError("Mensagem sem identificador.", error_type="api")
+        url = f"{self.base_url}/message/{msg_id}/download"
+        try:
+            with httpx.Client(timeout=max(self.timeout, 120.0)) as client:
+                resp = client.get(url, params={"phone": self._message_jid(phone)},
+                                  headers=self._headers)
+        except httpx.ConnectError:
+            raise GOWASendError(
+                "WhatsApp não está acessível. Verifique se o serviço está rodando.",
+                error_type="network",
+            )
+        except httpx.HTTPError as e:
+            raise GOWASendError(f"Falha ao baixar o arquivo: {e}", error_type="network")
+
+        detail = ""
+        try:
+            body = resp.json()
+        except ValueError:
+            body = {}
+        if isinstance(body, dict):
+            detail = str(body.get("message") or body.get("error") or "")
+        if resp.status_code >= 400:
+            low = detail.lower()
+            gone = any(s in low for s in (
+                "403", "404", "410", "not found", "expired", "no longer",
+                "failed to download media", "media not available",
+            ))
+            logger.warning("GOWA download_media HTTP %s", resp.status_code)
+            raise GOWASendError(
+                detail or f"Erro da API do WhatsApp (HTTP {resp.status_code})",
+                error_type="expired" if gone else "api",
+            )
+        results = body.get("results", body) if isinstance(body, dict) else {}
+        if not isinstance(results, dict):
+            results = {}
+        file_path = str(results.get("file_path") or results.get("FilePath") or "")
+        if not file_path:
+            raise GOWASendError("O WhatsApp não devolveu o arquivo.", error_type="api")
+        return {
+            "file_path": file_path,
+            "filename": str(results.get("filename") or results.get("Filename") or ""),
+            "file_size": int(results.get("file_size") or results.get("FileSize") or 0),
+        }
+
     def get_message_filename(self, chat_jid: str, msg_id: str) -> str:
         """Resolve a media message's original filename from GOWA chat storage.
 

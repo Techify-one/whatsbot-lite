@@ -91,9 +91,13 @@ messages = Table(
     Column("revoked", Integer, nullable=False, server_default="0"),
     Column("reactions", Text),  # JSON: {emoji: [reactor, ...]}
     Column("reply_to_msg_id", Text),  # GOWA msg_id of the quoted message (reply)
+    # NULL = normal. 'discarded' = file not kept (auto-download policy);
+    # 'removed' = file deleted later by the file manager.
+    Column("media_state", Text),
 )
 Index("idx_msg_contact_ts", messages.c.contact_id, messages.c.ts)
 Index("idx_msg_id", messages.c.msg_id)
+Index("idx_msg_media_path", messages.c.media_path)
 
 
 usage = Table(

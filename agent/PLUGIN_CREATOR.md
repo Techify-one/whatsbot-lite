@@ -408,6 +408,16 @@ Eventos mais usados: `message.received` (antes de salvar), `message.saved` (depo
 Prefira tools + prompt quando a decisão depende da interpretação da IA; prefira `message.saved` quando o
 gatilho é objetivo e independe da IA.
 
+**Mídia recebida pode não ter arquivo.** Por padrão o WhatsBot guarda só áudios; foto, figurinha, vídeo e
+documento são descartados depois que a IA os processou (o usuário muda isso em Painel → Modelos e mídia).
+Em `message.saved`, `media_type` continua preenchido, mas o arquivo em `media_path` pode ser apagado logo
+em seguida: o payload traz `media_will_discard: true` quando isso vai acontecer. Nunca assuma que
+`media_path` existe no disco depois do handler; copie o arquivo na hora se precisar dele, e trate
+`media_path` vazio/`None` em qualquer leitura de mensagens salvas (a linha no banco tem `media_state` =
+`discarded` ou `removed`). Arquivos de mídia ficam em `statics/media/` e `statics/operator/`, pastas que o
+usuário pode apagar pela tela Arquivos: plugin que precisa de um arquivo para sempre deve gravar em
+`storages/plugins/<id>/`, nunca nessas pastas.
+
 Filters recebem `(ctx, value)` e devolvem o valor alterado; `None` cancela a etapa:
 
 ```python

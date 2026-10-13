@@ -6,6 +6,7 @@ import { SendIcon, BackArrowIcon, DefaultAvatar, GroupAvatar, EmojiIcon, AttachI
 import { formatBubbleTime, isSameDay, formatDateSeparator, avatarUrl } from './utils.js';
 import { formatWhatsApp } from '../../utils/formatWhatsApp.js';
 import { AudioPlayer } from './AudioPlayer.js';
+import { MediaPlaceholder } from './MediaPlaceholder.js';
 import { MessageContextMenu, CopyIcon, TrashIcon, ReplyIcon, ImproveIcon, copyToClipboard } from './MessageContextMenu.js';
 import { EmojiPicker } from './EmojiPicker.js';
 
@@ -1209,7 +1210,14 @@ export function ContactDetail({ phone, onBack, messages, info, contact, onAvatar
                         </div>
                       `;
                     })() : ''}
-                    ${m.revoked ? '' : m.media_type === 'image' ? html`
+                    ${m.revoked ? '' : (m.media_state && !m.media_path && ['image', 'sticker', 'video', 'audio', 'document'].includes(m.media_type)) ? html`
+                      <${MediaPlaceholder} phone=${phone} message=${m} readOnly=${sandbox} />
+                      ${(() => {
+                        // Keep what the AI wrote about the file (description / transcript / caption).
+                        const keep = (displayContent || '').replace(/^\[(?:Imagem|Áudio|Vídeo|Documento)[^\]]*\]\n?/, '').trim();
+                        return keep ? html`<span dangerouslySetInnerHTML=${{ __html: fmt(keep) }}></span>` : null;
+                      })()}
+                    ` : m.media_type === 'image' ? html`
                       <img
                         src="${m._isLocalBlob ? m.media_path : '/' + m.media_path}"
                         alt="Imagem"

@@ -2,6 +2,7 @@
 
 import asyncio
 import logging
+import os
 import time
 from typing import Any
 
@@ -10,7 +11,7 @@ import httpx
 from config.settings import LLM_API_BASE_URL
 from server.auth import generate_salt, hash_password
 from server.helpers import _ok, _err, _mask_key
-from server import balance_monitor
+from server import balance_monitor, media_policy
 from agent import group_mentions
 from plugins.events import emit as emit_event, emit_with_filter
 
@@ -32,6 +33,12 @@ def register_routes(app, deps):
     ws_manager = deps.ws_manager
     state = deps.state
 
+    def _disk_limit_gb() -> float:
+        try:
+            return max(0.0, float(settings.get("disk_limit_gb", 0.0) or 0.0))
+        except (TypeError, ValueError):
+            return 0.0
+
     @app.get("/api/config")
     async def get_config():
         return _ok({
@@ -43,6 +50,9 @@ def register_routes(app, deps):
             "document_model": settings.get("document_model", "google/gemini-2.5-flash"),
             "system_prompt": settings.get("system_prompt", ""),
             "group_reply_mode": settings.get("group_reply_mode", "mention_only"),
+            "media_autodownload": media_policy.normalize(settings.get("media_autodownload")),
+            "disk_limit_gb": _disk_limit_gb(),
+            "disk_limit_locked": bool(os.environ.get("WHATSBOT_DISK_LIMIT_GB", "").strip()),
             "auto_reply": settings.get("auto_reply", True),
             "max_context_messages": settings.get("max_context_messages", 10),
             "message_batch_delay": settings.get("message_batch_delay", 3.0),
@@ -89,6 +99,7 @@ def register_routes(app, deps):
             "max_executions", "default_ai_enabled", "setup_completed",
             "low_balance_enabled", "low_balance_threshold",
             "ai_engine_enabled",
+            "media_autodownload", "disk_limit_gb",
             # Only the toggle is user-writable here. gowa_skipped_version has
             # its own endpoint and the other two are written by the server.
             "gowa_auto_check_enabled",
@@ -96,9 +107,20 @@ def register_routes(app, deps):
         }
         keys_changed = []
         for key, value in body.items():
-            if key in allowed_keys:
-                settings[key] = value
-                keys_changed.append(key)
+            if key not in allowed_keys:
+                continue
+            if key == "media_autodownload":
+                # Never store junk: merge over the lean defaults.
+                value = media_policy.normalize(value)
+            elif key == "disk_limit_gb":
+                if os.environ.get("WHATSBOT_DISK_LIMIT_GB", "").strip():
+                    continue  # hosting owns the limit; the panel cannot override it
+                try:
+                    value = max(0.0, float(value or 0))
+                except (TypeError, ValueError):
+                    continue
+            settings[key] = value
+            keys_changed.append(key)
 
         # Handle password set/change/remove
         if "web_password" in body:

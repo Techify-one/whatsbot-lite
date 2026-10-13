@@ -972,7 +972,7 @@ check("POST /sandbox/clear (all) -> 200", r.status_code == 200)
 # ═══════════════════════════════════════════════════════════════════
 section("Frontend SPA Routes")
 
-for path in ["/", "/painel", "/sandbox", "/costs"]:
+for path in ["/", "/painel", "/sandbox", "/costs", "/arquivos"]:
     r = client.get(path)
     check(f"GET {path} -> 200", r.status_code == 200)
 
@@ -1234,6 +1234,293 @@ check("GET /health (auth exempt) -> 200", r.status_code == 200)
 # Remove password to not affect other tests
 r = client.put("/api/config", json={"web_password": ""}, headers={"Authorization": f"Bearer {token}"})
 check("REMOVE password -> 200", r.status_code == 200)
+
+# ═══════════════════════════════════════════════════════════════════
+#  Media auto-download policy + file manager
+# ═══════════════════════════════════════════════════════════════════
+section("Media policy (config)")
+r = client.get("/api/config")
+_pol = r.json()["data"]["media_autodownload"]
+check("config exposes the lean default matrix",
+      _pol["audio"] == {"individual": True, "group": True}
+      and _pol["image"] == {"individual": False, "group": False}
+      and _pol["video"]["group"] is False and _pol["document"]["individual"] is False)
+check("sticker has no row of its own", "sticker" not in _pol)
+r = client.put("/api/config", json={"media_autodownload": {"image": {"group": True}, "zzz": 1, "audio": "x"}})
+check("PUT media_autodownload -> 200", r.status_code == 200)
+_pol = client.get("/api/config").json()["data"]["media_autodownload"]
+check("PUT merges over defaults and drops junk",
+      _pol["image"] == {"individual": False, "group": True}
+      and _pol["audio"] == {"individual": True, "group": True} and "zzz" not in _pol)
+client.put("/api/config", json={"media_autodownload": {}})
+check("PUT {} resets to defaults", client.get("/api/config").json()["data"]["media_autodownload"]["image"]["group"] is False)
+client.put("/api/config", json={"disk_limit_gb": 5})
+check("disk_limit_gb is saved", client.get("/api/config").json()["data"]["disk_limit_gb"] == 5)
+client.put("/api/config", json={"disk_limit_gb": "lixo"})
+check("disk_limit_gb ignores junk", client.get("/api/config").json()["data"]["disk_limit_gb"] == 5)
+client.put("/api/config", json={"disk_limit_gb": -3})
+check("disk_limit_gb never goes negative", client.get("/api/config").json()["data"]["disk_limit_gb"] == 0)
+
+section("Media policy (webhook discard)")
+_media_root = PROJECT_ROOT / "statics" / "media"
+_test_dir = _media_root / "_policy_test"
+_test_dir.mkdir(parents=True, exist_ok=True)
+_saved_cfg = {k: settings.get(k) for k in (
+    "image_transcription_enabled", "document_transcription_enabled",
+    "audio_transcription_mode", "message_batch_delay", "auto_reply")}
+settings["image_transcription_enabled"] = False
+settings["document_transcription_enabled"] = False
+settings["audio_transcription_mode"] = "off"
+settings["message_batch_delay"] = 0.2
+mock_gowa_client.get_message_filename = MagicMock(return_value="")
+
+def _media_file(name: str, size: int = 64) -> str:
+    (_test_dir / name).write_bytes(b"x" * size)
+    return f"statics/media/_policy_test/{name}"
+
+def _msg_row(phone_key: str, msg_id: str):
+    c = contact_repo.get_by_phone(phone_key)
+    for m in message_repo.get_all(c["id"]):
+        if m.get("msg_id") == msg_id:
+            return m
+    return None
+
+def _group_media(msg_id: str, kind: str, path: str):
+    return client.post("/api/webhook", json={"event": "message", "payload": {
+        "id": msg_id, "chat_id": "120363000000000001@g.us",
+        "from": "5511988880001:5@s.whatsapp.net", "from_name": "Membro",
+        "subject": "Grupo Teste", "is_from_me": False, "timestamp": str(int(time.time())),
+        kind: {"path": path, "caption": ""},
+    }})
+
+_grp = "120363000000000001@g.us"
+_p = _media_file("g_img.jpg")
+r = _group_media("pol_g_img", "image", _p)
+check("group image -> 200", r.status_code == 200)
+_row = _msg_row(_grp, "pol_g_img")
+check("group image is saved", _row is not None and _row.get("media_type") == "image")
+check("group image: file dropped by the default policy", not (PROJECT_ROOT / _p).exists())
+check("group image: media_path cleared", _row is not None and not _row.get("media_path"))
+check("group image: state is discarded", _row is not None and _row.get("media_state") == "discarded")
+
+_p = _media_file("g_aud.ogg")
+_group_media("pol_g_aud", "audio", _p)
+_row = _msg_row(_grp, "pol_g_aud")
+check("group audio: file kept (audio is on by default)", (PROJECT_ROOT / _p).exists())
+check("group audio: media_path kept, no state",
+      _row is not None and _row.get("media_path") == _p and not _row.get("media_state"))
+
+_p = _media_file("g_vid.mp4")
+_group_media("pol_g_vid", "video", _p)
+check("group video: dropped", not (PROJECT_ROOT / _p).exists())
+_p = _media_file("g_doc.pdf")
+_group_media("pol_g_doc", "document", _p)
+check("group document: dropped", not (PROJECT_ROOT / _p).exists())
+_p = _media_file("g_stk.webp")
+_group_media("pol_g_stk", "sticker", _p)
+check("group sticker: follows the image row (dropped)", not (PROJECT_ROOT / _p).exists())
+_row = _msg_row(_grp, "pol_g_stk")
+check("group sticker: message kept as sticker/discarded",
+      _row is not None and _row.get("media_type") == "sticker" and _row.get("media_state") == "discarded")
+
+client.put("/api/config", json={"media_autodownload": {"image": {"group": True}}})
+_p = _media_file("g_img_keep.jpg")
+_group_media("pol_g_img_keep", "image", _p)
+check("group image kept when the group toggle is on", (PROJECT_ROOT / _p).exists())
+_p = _media_file("g_img_ind.jpg")
+client.put("/api/config", json={"media_autodownload": {"image": {"group": True, "individual": False}}})
+_row = _msg_row(_grp, "pol_g_img_keep")
+check("kept image keeps its path", _row is not None and bool(_row.get("media_path")))
+client.put("/api/config", json={"media_autodownload": {}})
+
+# Outside statics/media nothing is ever deleted, whatever the payload says.
+_outside = Path(_tmpdir) / "not_media.jpg"
+_outside.write_bytes(b"keep me")
+_group_media("pol_g_outside", "image", str(_outside))
+check("a path outside statics/media is never deleted", _outside.exists())
+_p = "statics/operator/policy_guard.png"
+(PROJECT_ROOT / "statics" / "operator").mkdir(parents=True, exist_ok=True)
+(PROJECT_ROOT / _p).write_bytes(b"operator file")
+_group_media("pol_g_oper", "image", _p)
+check("a path in statics/operator is never deleted by the policy", (PROJECT_ROOT / _p).exists())
+(PROJECT_ROOT / _p).unlink()
+
+# Private chat goes through the batch cycle (needs a live event loop).
+_ind = "5511977770001"
+_c = contact_repo.get_or_create(_ind)
+contact_repo.update(_c["id"], ai_enabled=False)
+_p_img = _media_file("i_img.jpg")
+_p_aud = _media_file("i_aud.ogg")
+
+def _wait(fn, timeout=8.0):
+    end = time.time() + timeout
+    while time.time() < end:
+        if fn():
+            return True
+        time.sleep(0.1)
+    return False
+
+with TestClient(app, raise_server_exceptions=False) as live:
+    for _mid, _kind, _path in (("pol_i_img", "image", _p_img), ("pol_i_aud", "audio", _p_aud)):
+        live.post("/api/webhook", json={"event": "message", "payload": {
+            "id": _mid, "chat_id": f"{_ind}@s.whatsapp.net", "from": f"{_ind}@s.whatsapp.net",
+            "from_name": "Cliente", "is_from_me": False, "timestamp": str(int(time.time())),
+            _kind: {"path": _path, "caption": ""},
+        }})
+    check("private image: dropped after the cycle", _wait(lambda: not (PROJECT_ROOT / _p_img).exists()))
+    _row = _msg_row(_ind, "pol_i_img")
+    check("private image: saved with discarded state",
+          _row is not None and _row.get("media_state") == "discarded" and not _row.get("media_path"))
+    check("private audio: kept", (PROJECT_ROOT / _p_aud).exists())
+    _row = _msg_row(_ind, "pol_i_aud")
+    check("private audio: path kept", _row is not None and _row.get("media_path") == _p_aud)
+
+r = client.get(f"/api/contacts/{_ind}")
+_api_msgs = r.json()["data"]["messages"]
+_api_img = next((m for m in _api_msgs if m.get("msg_id") == "pol_i_img"), {})
+check("API exposes media_state on a discarded message", _api_img.get("media_state") == "discarded")
+check("API keeps media_type for the placeholder", _api_img.get("media_type") == "image")
+
+section("Media download button (download-media)")
+from gowa.client import GOWASendError
+def _fresh_download(rel_name: str) -> dict:
+    rel = _media_file(rel_name, 128)
+    return {"file_path": rel, "filename": rel_name, "file_size": 128}
+
+mock_gowa_client.download_media = MagicMock(return_value=_fresh_download("restored.jpg"))
+r = client.post(f"/api/contacts/{_ind}/messages/pol_i_img/download-media")
+check("download-media -> 200", r.status_code == 200, r.text[:200])
+_row = _msg_row(_ind, "pol_i_img")
+check("download-media restores the path and clears the state",
+      _row is not None and _row.get("media_path") == "statics/media/_policy_test/restored.jpg"
+      and not _row.get("media_state"))
+mock_gowa_client.download_media.reset_mock()
+r = client.post(f"/api/contacts/{_ind}/messages/pol_i_img/download-media")
+check("download-media on a message that already has its file does not call GOWA",
+      r.status_code == 200 and not mock_gowa_client.download_media.called)
+
+mock_gowa_client.download_media = MagicMock(side_effect=GOWASendError("gone", error_type="expired"))
+r = client.post(f"/api/contacts/{_grp}/messages/pol_g_vid/download-media")
+check("expired media -> 410 with a friendly message",
+      r.status_code == 410 and "não está mais disponível" in r.json()["error"], r.text[:200])
+mock_gowa_client.download_media = MagicMock(side_effect=GOWASendError("down", error_type="network"))
+r = client.post(f"/api/contacts/{_grp}/messages/pol_g_vid/download-media")
+check("GOWA unreachable -> 502", r.status_code == 502)
+r = client.post(f"/api/contacts/{_grp}/messages/nope/download-media")
+check("unknown message -> 404", r.status_code == 404)
+r = client.post("/api/contacts/5500000000000/messages/x/download-media")
+check("unknown conversation -> 404", r.status_code == 404)
+_text_c = contact_repo.get_by_phone("5511999990001")
+r = client.post("/api/contacts/5511999990001/messages/nope/download-media")
+check("a text message is not downloadable", r.status_code == 404)
+mock_gowa_client.download_media = MagicMock(return_value={
+    "file_path": "storages/whatsbot.db", "filename": "x", "file_size": 1})
+r = client.post(f"/api/contacts/{_grp}/messages/pol_g_vid/download-media")
+check("a path outside statics/media returned by GOWA is refused", r.status_code == 502)
+_row = _msg_row(_grp, "pol_g_vid")
+check("...and the message is left untouched", _row is not None and _row.get("media_state") == "discarded")
+mock_gowa_client.download_media = MagicMock(return_value=_fresh_download("restored_grp.mp4"))
+r = client.post(f"/api/contacts/{_grp}/messages/pol_g_vid/download-media")
+check("group media can be downloaded too", r.status_code == 200)
+
+section("File manager (API)")
+r = client.get("/api/files/usage")
+check("GET /api/files/usage -> 200", r.status_code == 200)
+_u = r.json()["data"]
+check("usage has the received root", _u["roots"]["received"]["files"] >= 3)
+check("usage separates what cannot be deleted", _u["system_bytes"] > 0 and _u["total_bytes"] >= _u["deletable_bytes"])
+check("usage without limit has no percent", _u["limit_bytes"] == 0 and _u["percent"] is None)
+client.put("/api/config", json={"disk_limit_gb": 1})
+_u = client.get("/api/files/usage?refresh=true").json()["data"]
+check("usage with a limit reports percent", _u["limit_bytes"] == 1024 ** 3 and _u["percent"] is not None)
+client.put("/api/config", json={"disk_limit_gb": 0})
+
+r = client.get("/api/files?root=received&flat=true&sort=size&order=desc&limit=500")
+check("GET /api/files flat -> 200", r.status_code == 200)
+_items = r.json()["data"]["items"]
+_mine = [i for i in _items if i["rel"].startswith("_policy_test/")]
+check("lists the test files", len(_mine) >= 3)
+check("sorted heaviest first", [i["size"] for i in _items] == sorted([i["size"] for i in _items], reverse=True))
+check("rows carry opaque ids, never paths", all("/" not in i["id"] and "statics" not in i["id"] for i in _items))
+_restored = next((i for i in _mine if i["name"] == "restored.jpg"), None)
+check("a file linked to a message shows its origin",
+      _restored is not None and _restored["orphan"] is False and _restored["origin"]["phone"] == _ind)
+_orph = next((i for i in _mine if i["name"] == "g_aud.ogg"), None)
+check("a kept group file is linked to its group",
+      _orph is not None and _orph["origin"]["is_group"] is True)
+r = client.get("/api/files?root=received&flat=true&orphans=true&limit=500")
+_orph_names = {i["name"] for i in r.json()["data"]["items"]}
+(_test_dir / "orphan_one.bin").write_bytes(b"o" * 10)
+client.get("/api/files/usage?refresh=true")
+_orph_names = {i["name"] for i in client.get("/api/files?root=received&flat=true&orphans=true&limit=500").json()["data"]["items"]}
+check("orphans filter lists files without a message", "orphan_one.bin" in _orph_names)
+check("orphans filter excludes linked files", "restored.jpg" not in _orph_names and "g_aud.ogg" not in _orph_names)
+check("bad root -> 400", client.get("/api/files?root=storages").status_code == 400)
+check("traversal in path -> 400", client.get("/api/files?root=received&path=../../storages").status_code == 400)
+check("received root lists folders by default",
+      any(i["type"] == "dir" for i in client.get("/api/files?root=received").json()["data"]["items"]))
+(_media_root / "5511999990001").mkdir(parents=True, exist_ok=True)
+(_media_root / "5511999990001" / "label_probe.jpg").write_bytes(b"p")
+(_media_root / "120363000000000001").mkdir(parents=True, exist_ok=True)
+(_media_root / "120363000000000001" / "label_probe.jpg").write_bytes(b"p")
+client.get("/api/files/usage?refresh=true")
+_dirs = {i["name"]: i for i in client.get("/api/files?root=received").json()["data"]["items"] if i["type"] == "dir"}
+check("a contact folder shows the contact name", _dirs["5511999990001"].get("label") == (contact_repo.get_by_phone("5511999990001")["name"].lstrip("~")))
+check("a group folder (phone without @g.us) shows the group name and flag",
+      _dirs["120363000000000001"].get("label") and _dirs["120363000000000001"].get("is_group") is True)
+check("a folder with no contact keeps no label", "label" not in _dirs.get("_policy_test", {}))
+shutil.rmtree(_media_root / "5511999990001", ignore_errors=True)
+shutil.rmtree(_media_root / "120363000000000001", ignore_errors=True)
+client.get("/api/files/usage?refresh=true")
+
+r = client.get(f"/api/files/{_restored['id']}/preview")
+check("preview serves the file", r.status_code == 200 and r.content == b"x" * 128)
+check("preview is inline for images", "inline" in r.headers.get("content-disposition", ""))
+check("preview sets nosniff", r.headers.get("x-content-type-options") == "nosniff")
+r = client.get(f"/api/files/{_restored['id']}/preview?download=true")
+check("download=true forces attachment", "attachment" in r.headers.get("content-disposition", ""))
+(_test_dir / "evil.html").write_text("<script>alert(1)</script>")
+client.get("/api/files/usage?refresh=true")
+_evil = next(i for i in client.get("/api/files?root=received&flat=true&limit=500").json()["data"]["items"] if i["name"] == "evil.html")
+r = client.get(f"/api/files/{_evil['id']}/preview")
+check("html is never rendered inline", "attachment" in r.headers.get("content-disposition", "")
+      and r.headers.get("content-type", "").startswith("application/octet-stream"))
+import base64 as _b64
+def _forge(root, rel):
+    return _b64.urlsafe_b64encode(f"{root}:{rel}".encode()).decode().rstrip("=")
+check("preview of a forged traversal id -> 404",
+      client.get(f"/api/files/{_forge('received', '../../storages/whatsbot.db')}/preview").status_code == 404)
+check("preview of garbage id -> 404", client.get("/api/files/!!!/preview").status_code == 404)
+
+section("File manager (delete)")
+check("delete without ids -> 400", client.post("/api/files/delete", json={"ids": []}).status_code == 400)
+check("delete with non-string ids -> 400", client.post("/api/files/delete", json={"ids": [1]}).status_code == 400)
+_db_before = (PROJECT_ROOT / "storages" / "whatsbot.db").exists()
+r = client.post("/api/files/delete", json={"ids": [
+    _forge("received", "../../storages/whatsbot.db"), _forge("received", ".."), _forge("storages", "x"), "lixo"]})
+check("hostile ids delete nothing", r.status_code == 200 and r.json()["data"]["files"] == 0 and r.json()["data"]["failed"] == 4)
+check("the database survived", (PROJECT_ROOT / "storages" / "whatsbot.db").exists() == _db_before)
+
+r = client.post("/api/files/delete", json={"ids": [_restored["id"]]})
+check("delete a linked file", r.status_code == 200 and r.json()["data"]["files"] == 1 and r.json()["data"]["messages"] == 1, r.text[:200])
+check("the file is gone", not (PROJECT_ROOT / "statics/media/_policy_test/restored.jpg").exists())
+_row = _msg_row(_ind, "pol_i_img")
+check("the message becomes removed", _row is not None and _row.get("media_state") == "removed" and not _row.get("media_path"))
+r = client.post(f"/api/contacts/{_ind}/messages/pol_i_img/download-media")
+check("a removed file can be requested again (button still offered)", r.status_code in (200, 410, 502))
+
+_dir_id = next(i["id"] for i in client.get("/api/files?root=received").json()["data"]["items"] if i["name"] == "_policy_test")
+r = client.post("/api/files/delete", json={"ids": [_dir_id]})
+check("delete a whole folder", r.status_code == 200 and r.json()["data"]["files"] >= 3)
+check("the folder is gone", not _test_dir.exists())
+check("the media root remains", _media_root.is_dir())
+_row = _msg_row(_ind, "pol_i_aud")
+check("messages of a deleted folder are flagged", _row is not None and _row.get("media_state") == "removed")
+
+# restore what this section changed
+for _k, _v in _saved_cfg.items():
+    settings[_k] = _v
+shutil.rmtree(_test_dir, ignore_errors=True)
 
 # ═══════════════════════════════════════════════════════════════════
 #  Summary

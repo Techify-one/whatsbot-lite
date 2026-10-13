@@ -15,7 +15,7 @@ from server.auth import auth_required, verify_token
 from server.helpers import _get_web_dir
 from server.state import MemoryLogHandler, ConnectionManager, AppState
 from server.background import start_gowa_task, status_poll_loop, qr_poll_loop, avatar_fetch_task, gowa_update_check_loop
-from server.routes import logs, sandbox, config, whatsapp, websocket, usage, contacts, webhook, auth, tags, executions, update, setup as setup_routes, plugins as plugins_routes, tools as tools_routes, admin as admin_routes, ai_engine as ai_engine_routes, gowa_update as gowa_update_routes, chat as chat_routes
+from server.routes import files as files_routes, logs, sandbox, config, whatsapp, websocket, usage, contacts, webhook, auth, tags, executions, update, setup as setup_routes, plugins as plugins_routes, tools as tools_routes, admin as admin_routes, ai_engine as ai_engine_routes, gowa_update as gowa_update_routes, chat as chat_routes
 from db.repositories import tool_override_repo
 from agent import group_mentions, agent_factory
 from agent import ai_tool_installer
@@ -28,6 +28,7 @@ from plugins.events import (
     emit as emit_event,
 )
 from server.balance_monitor import set_runtime as _set_balance_runtime
+from server.file_manager import FileManager
 
 logger = logging.getLogger(__name__)
 
@@ -55,6 +56,8 @@ class ServerDeps:
     state: AppState
     memory_log_handler: MemoryLogHandler
     statics_senditems_dir: Path
+    statics_media_dir: Path = None
+    file_manager: object = None
     plugins_dir: Path = None
     plugins_registry: PluginRegistry = None
     # Dynamically set by webhook route for cross-module access
@@ -142,6 +145,8 @@ def create_app(
         state=state,
         memory_log_handler=_memory_log_handler,
         statics_senditems_dir=statics_senditems_dir,
+        statics_media_dir=statics_media_dir,
+        file_manager=FileManager(settings.data_dir),
         plugins_dir=plugins_dir,
         plugins_registry=registry,
     )
@@ -236,7 +241,7 @@ def create_app(
         if s.get("path", "").startswith("/")
     }
     _SPA_PATHS = (
-        {"/", "/painel", "/sandbox", "/costs", "/executions", "/plugins", "/tools", "/chat", "/wizard"}
+        {"/", "/painel", "/sandbox", "/costs", "/executions", "/plugins", "/tools", "/chat", "/wizard", "/arquivos"}
         | _PLUGIN_SPA_PATHS
     )
 
@@ -301,6 +306,7 @@ def create_app(
     @app.get("/executions")
     @app.get("/plugins")
     @app.get("/tools")
+    @app.get("/arquivos")
     @app.get("/chat")
     @app.get("/chat/projects/{project_id}")
     @app.get("/chat/projects/{project_id}/conversations/{conversation_id}")
@@ -351,6 +357,7 @@ def create_app(
     ai_engine_routes.register_routes(app, deps)
     gowa_update_routes.register_routes(app, deps)
     chat_routes.register_routes(app, deps)
+    files_routes.register_routes(app, deps)
 
     # ── Plugin routers and static assets ──────────────────────────────
     for loaded in registry.loaded.values():

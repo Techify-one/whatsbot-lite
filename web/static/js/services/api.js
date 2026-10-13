@@ -203,6 +203,29 @@ export async function reactToMessage(phone, msgId, emoji) {
   });
 }
 
+// Fetch again from WhatsApp a file the download policy dropped (best effort).
+export async function downloadMessageMedia(phone, msgId) {
+  return request('POST',
+    `/api/contacts/${encodeURIComponent(phone)}/messages/${encodeURIComponent(msgId)}/download-media`);
+}
+
+// File manager (Arquivos). The server only ever receives opaque ids.
+export async function getFilesUsage(refresh = false) {
+  return request('GET', `/api/files/usage${refresh ? '?refresh=true' : ''}`);
+}
+
+export async function listFiles(params = {}) {
+  const qs = new URLSearchParams();
+  Object.entries(params).forEach(([k, v]) => {
+    if (v !== undefined && v !== null && v !== '' && v !== false) qs.set(k, String(v));
+  });
+  return request('GET', `/api/files?${qs.toString()}`);
+}
+
+export async function deleteFiles(ids) {
+  return request('POST', '/api/files/delete', { ids });
+}
+
 export async function sendPrivateMessage(phone, text, opts = {}) {
   const body = { text };
   if (opts.aiRead !== undefined) body.ai_read = !!opts.aiRead;

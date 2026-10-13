@@ -68,6 +68,9 @@ gowa/binary.py       → resolve qual binário rodar (bin/ bundled vs storages/b
 gowa/updater.py      → download/verificação/swap/rollback do binário GOWA
 gowa/proxy.py        → proxy de saída da conexão do WhatsApp (validação, URL, teste de conexão)
 server/routes/gowa_update.py → endpoints /api/gowa/* (versão, check, update, rollback, skip, proxy)
+server/media_policy.py → política de download automático de mídia (matriz tipo × individual/grupo, guarda de caminho)
+server/file_manager.py → listagem e remoção segura de statics/media e statics/operator (allowlist, ids opacos)
+server/routes/files.py → endpoints /api/files/* da tela Arquivos
 bin/gowa.exe         → binário GOWA pré-compilado do Windows (não editar; atualizações vão pra storages/bin/)
 storages/bin/        → binário GOWA atualizado pelo painel (writable, persiste em Docker/Coolify)
 WHATSBOT_VERSION     → versão + histórico de changelog do WhatsBot-Lite que acompanha esta release (fonte única, bumpado pelo /release-up)
@@ -155,7 +158,7 @@ Para Docker: setar `DATABASE_URL` no `.env` antes de subir o container — o arq
 | `config` | Configurações do app (key-value, valores JSON-encoded). Configs de plugin usam prefixo `plugin.<id>.` |
 | `contacts` | Contatos/grupos (phone, name, email, profissão, empresa, flags). Inclui `is_pinned` (fixar conversa no topo) e `has_unread_mention` (@menção não lida em grupo) |
 | `observations` | Notas/observações por contato (texto livre) |
-| `messages` | Histórico completo de mensagens (role, content, ts, media). Inclui `revoked` (apagada pra todos), `reactions` (JSON `{emoji: [reactor,...]}`) e `reply_to_msg_id` (msg_id GOWA da mensagem citada) |
+| `messages` | Histórico completo de mensagens (role, content, ts, media). Inclui `revoked` (apagada pra todos), `reactions` (JSON `{emoji: [reactor,...]}`), `reply_to_msg_id` (msg_id GOWA da mensagem citada) e `media_state` (`NULL` normal, `discarded` = arquivo não guardado pela política de download, `removed` = apagado depois na tela Arquivos; nos dois casos `media_path` fica `NULL` e `media_type` é mantido). `media_path` é indexado |
 | `usage` | Registros de uso da API (tokens, custo, modelo) |
 | `tags` | Tags globais (name, color) |
 | `contact_tags` | Relação N:N contato ↔ tag |
@@ -497,6 +500,55 @@ estado por polling. Fechar/trocar a tela deve abortar somente o `fetch` do front
 pelo botão continua usando `POST /api/chat/runs/{run_id}/cancel`. Esse estado ativo é por processo: um
 reinício do WhatsBot-Lite encerra tarefas em curso, mas fechar o navegador não.
 
+## Download automático de mídia e tela Arquivos
+
+O GOWA só tem um liga/desliga geral de auto-download (`--auto-download-media`, sem filtro por tipo nem por
+chat em nenhuma versão), então ele **continua ligado** e o app decide o que fica. A matriz
+`media_autodownload` (config; 4 linhas: `audio`, `image` — inclui figurinha —, `video`, `document` — × `individual`/`group`)
+tem padrão enxuto para todos, instalação local inclusa: só áudio fica. A lógica pura está em
+[server/media_policy.py](server/media_policy.py); a decisão fica em [webhook.py](server/routes/webhook.py).
+
+- **Descarte depois da IA**: o webhook marca o item (`discard`) mas o arquivo só é apagado em
+  `_finalize_discards`, no `finally` do ciclo (ou ao fim do ramo de grupo sem menção), depois de transcrever,
+  descrever e responder. Os descartes do lote são coletados no início do ciclo para valer mesmo se uma nova
+  mensagem cancelar o ciclo. A mensagem fica com `media_type`, `media_path = NULL`, `media_state = 'discarded'`
+  e o texto da descrição/transcrição. Só apaga arquivo regular, não-symlink, dentro de `statics/media`
+  (`is_discardable_path`); qualquer outro caminho (de plugin, de `statics/operator`) é mantido.
+- **Mídia do próprio operador** (`is_from_me`, envios pelo painel) nunca passa pela política.
+- **Botão Baixar**: `POST /api/contacts/{phone}/messages/{msg_id}/download-media` chama
+  `GOWAClient.download_media` (`GET /message/{id}/download?phone=`), valida que o caminho devolvido está em
+  `statics/media` e restaura `media_path`. Sem media-retry no GOWA e sem retry automático: mídia expirada devolve
+  410 ("não está mais disponível no WhatsApp"). O prazo real de expiração no WhatsApp não é oficial (dias a poucas
+  semanas) e **não foi medido** com GOWA real.
+- **WS** `message_media_updated` `{phone, msg_id, media_state, media_path}` troca o balão sem recarregar;
+  `storage_changed` `{files, bytes, messages}` atualiza a tela Arquivos.
+- **Plugins**: `media_path` pode ser `None`/apagado; `message.saved` traz `media_will_discard`. Documentado em
+  [agent/PLUGIN_CREATOR.md](agent/PLUGIN_CREATOR.md).
+
+**Tela Arquivos** (`/arquivos`, item no menu da engrenagem; [FileManager.js](web/static/js/components/FileManager.js)):
+lista só `statics/media` (recebidos) e `statics/operator` (enviados). Banco, sessão do WhatsApp, `.env`, código e
+plugins ficam fora da v1 (entram só no total como "Sistema e dados do app"). Regras de segurança em
+[server/file_manager.py](server/file_manager.py), cobertas por `tests/test_file_manager.py`:
+
+- allowlist de raízes; **o cliente nunca manda caminho**, só ids opacos devolvidos pela listagem (base64 de
+  `raiz:relativo`), revalidados do zero a cada operação;
+- recusa `..`, `\`, caminho absoluto, byte nulo, symlink (no alvo ou em qualquer ancestral), a própria raiz e tudo que
+  não seja arquivo/pasta regular; symlinks nunca são listados;
+- apagar pasta remove só o que há dentro dela; nunca remove a raiz; no máximo 1000 ids por chamada;
+- o preview força `attachment` e `application/octet-stream` para HTML/SVG, com `nosniff`;
+- log só com contagens e bytes, nunca nomes de arquivo.
+
+`WHATSBOT_DISK_LIMIT_GB` (env, vazia = sem limite) alimenta a barra de uso e trava o campo na tela; sem a env, o
+usuário define o limite em `disk_limit_gb` pela própria tela. É só informativo: não bloqueia nada.
+
+| Método | Endpoint | Descrição |
+|--------|----------|-----------|
+| GET | `/api/files/usage` | Totais (recebidos, enviados, "sistema") + limite/percentual; `?refresh=true` ignora o cache de 30 s |
+| GET | `/api/files?root=&path=&flat=&sort=&order=&kind=&orphans=&offset=&limit=` | Lista paginada; `root` ∈ `received`/`sent`; `orphans=true` = sem mensagem |
+| GET | `/api/files/{id}/preview` | Serve o arquivo (`?download=true` força download) |
+| POST | `/api/files/delete` | `{ids}` → apaga, marca `media_state='removed'`, devolve `{files, bytes, failed, messages}` |
+| POST | `/api/contacts/{phone}/messages/{msg_id}/download-media` | Busca de novo no WhatsApp um arquivo descartado/removido |
+
 ## Fotos de perfil (avatars)
 
 [server/avatars.py](server/avatars.py) cacheia as fotos de perfil em disco em `statics/avatars/<phone>.jpg` (servidas pelo mount estático). Como o WhatsApp não emite evento de "foto mudou", a atualização é por re-fetch do GOWA (ao abrir a conversa e numa varredura periódica de fundo — `AVATAR_REFRESH_INTERVAL = 1800s` em [server/background.py](server/background.py)), sobrescrevendo o arquivo só quando os bytes diferem. O frontend faz cache-bust pelo mtime (`avatar_v`); uma mudança dispara o WS `avatar_updated` `{phone, v}` pra atualizar ao vivo sem reload.
@@ -575,6 +627,7 @@ Nomes não vêm do GOWA (`DisplayName` volta vazio): são resolvidos de contatos
 Formato de resposta REST: `{"ok": bool, "data": ..., "error": ...}`
 
 Eventos WebSocket (frontend): `{"event": "...", "data": {...}}` — inclui `status`, `qr_update`, `gowa_status`, `config_saved`, `new_message`, `message_reaction`, `message_revoked`, `message_deleted`, `contact_pinned`, `group_participants_changed`, `avatar_updated` (`{phone, v}` — `v` = mtime do arquivo, usado pra cache-bust da foto), `low_balance` (saldo abaixo do threshold → abre o modal de recarga),
+`message_media_updated` (`{phone, msg_id, media_state, media_path}` — arquivo descartado, removido ou baixado de novo), `storage_changed` (`{files, bytes, messages}` — a tela Arquivos recarrega),
 `gowa_update_available` (nova versão do GOWA → abre o modal de atualização), `gowa_update_progress`
 (`{phase, progress, version}`, `phase ∈ {downloading, verifying, installing, restarting, health_check, rollback}`),
 `gowa_update_done` (`{ok, version, previous_version, rolled_back, message}`).

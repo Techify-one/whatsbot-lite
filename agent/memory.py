@@ -136,11 +136,13 @@ class ContactMemory:
     def add_message(self, role: str, content: str, *,
                     media_type: str | None = None, media_path: str | None = None,
                     status: str | None = None, msg_id: str | None = None,
-                    reply_to_msg_id: str | None = None):
+                    reply_to_msg_id: str | None = None,
+                    media_state: str | None = None):
         message_repo.add(
             self.id, role, content,
             media_type=media_type, media_path=media_path,
             status=status, msg_id=msg_id, reply_to_msg_id=reply_to_msg_id,
+            media_state=media_state,
         )
         # Touch updated_at
         contact_repo.update(self.id)
@@ -235,7 +237,9 @@ class ContactMemory:
                 result.append({"role": "user",
                                "content": f"[Nota privada do operador]: {content}"})
             elif mt == "image" and m["role"] == "user":
-                if i == last_image_idx:
+                # A discarded/removed image has no media_path: the saved text
+                # (description or placeholder) is all the model gets.
+                if i == last_image_idx and m.get("media_path"):
                     content = _build_image_content(m.get("media_path", ""), m.get("content", ""))
                 else:
                     content = m.get("content") or "[Imagem enviada pelo contato]"

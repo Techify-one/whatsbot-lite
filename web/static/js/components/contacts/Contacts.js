@@ -30,7 +30,7 @@ function sameMessage(a, b) {
 
 // ── Main Component ───────────────────────────────────────────────
 
-export function Contacts({ newMessage, chatPresence, contactInfoUpdated, tagsChanged, contactTagsUpdated, contactAiToggled, messagesRead, messageStatus, messageAction, messageReaction, avatarUpdated, groupParticipantsChanged, initialContactId, wsConnected, config, onConfigSave, onUnreadChange }) {
+export function Contacts({ newMessage, chatPresence, contactInfoUpdated, tagsChanged, contactTagsUpdated, contactAiToggled, messagesRead, messageStatus, messageAction, messageReaction, mediaUpdated, avatarUpdated, groupParticipantsChanged, initialContactId, wsConnected, config, onConfigSave, onUnreadChange }) {
   const [contacts, setContacts] = useState([]);
   const [loading, setLoading] = useState(true);
   const [search, setSearch] = useState('');
@@ -844,6 +844,27 @@ export function Contacts({ newMessage, chatPresence, contactInfoUpdated, tagsCha
       return changed ? { ...prev, messages: updated } : prev;
     });
   }, [messageReaction]);
+
+  // A received file was dropped by the download policy, deleted from the file
+  // manager, or fetched again by the "Baixar" button: swap the bubble in place.
+  useEffect(() => {
+    if (!mediaUpdated) return;
+    const { phone, msg_id, media_state, media_path } = mediaUpdated;
+    if (!msg_id || (phone && phone !== selectedRef.current)) return;
+    setContactData(prev => {
+      if (!prev || !prev.messages) return prev;
+      let changed = false;
+      const updated = prev.messages.map(m => {
+        if (m.msg_id !== msg_id) return m;
+        changed = true;
+        const next = { ...m, media_state: media_state || undefined, media_path: media_path || undefined };
+        if (!media_path) delete next.media_path;
+        if (!media_state) delete next.media_state;
+        return next;
+      });
+      return changed ? { ...prev, messages: updated } : prev;
+    });
+  }, [mediaUpdated]);
 
   // Sync last assistant message status from chat detail → sidebar
   // Covers both WS updates and fresh data from API fetch

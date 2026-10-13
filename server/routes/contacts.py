@@ -11,6 +11,7 @@ from gowa.client import GOWASendError, extract_msg_id
 
 from db.repositories import contact_repo, message_repo, config_repo
 from agent import group_mentions
+from server import media_policy
 from server.avatars import avatar_version, refresh_and_broadcast
 from server.helpers import _ok, _err, parse_split_reply
 from plugins.events import emit as emit_event, apply_filter, emit_with_filter
@@ -63,6 +64,7 @@ def register_routes(app, deps):
     state = deps.state
     settings = deps.settings
     statics_senditems_dir = deps.statics_senditems_dir
+    statics_media_dir = deps.statics_media_dir
 
     async def _send_read_receipts(phone: str, msg_ids: list[str]):
         """Send read receipts to GOWA in background (best-effort)."""
@@ -577,6 +579,56 @@ def register_routes(app, deps):
         })
         logger.info("[Delete] Revoked (me, kept in DB) msg %s/db %s for %s", msg_id, db_id, phone)
         return _ok({"message": "Mensagem apagada para você.", "msg_id": msg_id or None})
+
+    @app.post("/api/contacts/{phone}/messages/{msg_id}/download-media")
+    async def download_message_media(phone: str, msg_id: str):
+        """Fetch again, from WhatsApp, a file the auto-download policy dropped.
+
+        Best effort: WhatsApp keeps the file only for a while and GOWA has no
+        media-retry, so an old message can answer "not available anymore". Never
+        retried automatically; one click is one attempt.
+        """
+        if await asyncio.to_thread(_is_sandbox_contact, phone):
+            return _err("Esta é uma conversa de teste: não há arquivo no WhatsApp.", status=400)
+        contact_row = await asyncio.to_thread(contact_repo.get_by_phone, phone)
+        if not contact_row:
+            return _err("Conversa não encontrada.", status=404)
+        target = await asyncio.to_thread(message_repo.get_media_target, contact_row["id"], msg_id)
+        if not target or not media_policy.policy_kind(target.get("media_type")):
+            return _err("Mensagem não encontrada.", status=404)
+        if target.get("role") != "user":
+            return _err("Só dá para baixar arquivos recebidos.", status=400)
+        if target.get("media_path"):
+            existing = media_policy.is_discardable_path(
+                target["media_path"], statics_media_dir, settings.data_dir)
+            if existing is not None:
+                return _ok({"media_path": target["media_path"], "already": True})
+
+        try:
+            info = await asyncio.to_thread(gowa_client.download_media, msg_id, phone)
+        except GOWASendError as e:
+            if e.error_type == "expired":
+                return _err("Esse arquivo não está mais disponível no WhatsApp.", status=410)
+            if e.error_type == "network":
+                return _err("O WhatsApp não está acessível agora. Tente de novo em instantes.", status=502)
+            logger.warning("[DownloadMedia] %s msg %s: %s", phone, msg_id, e)
+            return _err("Não foi possível baixar o arquivo. Tente de novo mais tarde.", status=502)
+
+        # GOWA answers with a path relative to its own working directory (the
+        # project root). Accept it only if it lands inside statics/media.
+        resolved = media_policy.is_discardable_path(
+            info["file_path"], statics_media_dir, settings.data_dir)
+        if resolved is None:
+            logger.warning("[DownloadMedia] GOWA returned a path outside statics/media")
+            return _err("Não foi possível baixar o arquivo. Tente de novo mais tarde.", status=502)
+        rel = "statics/media/" + resolved.relative_to(statics_media_dir.resolve()).as_posix()
+
+        await asyncio.to_thread(message_repo.set_media, target["id"], rel, None)
+        await ws_manager.broadcast("message_media_updated", {
+            "phone": phone, "msg_id": msg_id, "media_state": None, "media_path": rel,
+        })
+        logger.info("[DownloadMedia] restored a %s for %s", target.get("media_type"), phone)
+        return _ok({"media_path": rel})
 
     @app.post("/api/contacts/{phone}/messages/react")
     async def react_to_message(phone: str, body: dict):

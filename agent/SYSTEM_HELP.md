@@ -48,7 +48,7 @@ O nome só vira clicável para números do Brasil e depois que a lista de partic
 O painel separa as configurações em três abas:
 
 - **Agente** reúne ativação da IA, instruções, contexto e comportamento das respostas. [Abrir aba Agente]({{base_url}}/painel?aba=agente)
-- **Modelos e mídia** reúne chave de API, modelos e leitura de áudios, imagens e documentos. [Abrir aba Modelos e mídia]({{base_url}}/painel?aba=modelos-midia)
+- **Modelos e mídia** reúne chave de API, modelos, leitura de áudios, imagens e documentos e o download automático de arquivos. [Abrir aba Modelos e mídia]({{base_url}}/painel?aba=modelos-midia)
 - **Sistema** reúne acesso, atualizações, banco de dados e o motor do WhatsApp. [Abrir aba Sistema]({{base_url}}/painel?aba=sistema)
 
 Cada opção abaixo tem um link direto. Ao abrir esse link, o WhatsBot-Lite seleciona a aba certa e leva a pessoa até a configuração.
@@ -135,6 +135,14 @@ Em **Painel → Modelos e mídia → API e Modelos**, escolha o modo de **Transc
 
 [Abrir transcrição de áudio]({{base_url}}/painel?aba=modelos-midia#audio-transcription)
 
+### Escolher quais arquivos recebidos o WhatsBot guarda
+
+Em **Painel → Modelos e mídia → Download automático de mídia**, há uma tabela com áudios, fotos e figurinhas, vídeos e documentos. Para cada tipo, marque se o arquivo deve ser guardado nas **conversas individuais** e nos **grupos**, e clique em **Salvar configurações** no fim do painel. O padrão guarda só os áudios; fotos, figurinhas, vídeos e documentos não são guardados, o que poupa muito espaço, principalmente em grupos movimentados.
+
+O que não for guardado continua aparecendo na conversa como “Foto não baixada” (ou Vídeo, Documento...), e a IA ainda descreve a imagem, lê o documento ou transcreve o áudio antes de o arquivo ser descartado, então o texto fica na conversa. Quem quiser ver o arquivo depois pode clicar em **Baixar** no balão: o WhatsBot tenta buscá-lo de novo no WhatsApp. Isso só funciona se o WhatsApp ainda tiver o arquivo; mensagens com mais de algumas semanas costumam não estar mais disponíveis, e o aviso aparece no próprio balão.
+
+[Abrir download automático de mídia]({{base_url}}/painel?aba=modelos-midia#download-midia)
+
 ### Gravar áudio dentro do Chat
 
 No Chat, use o botão de microfone ao lado do campo de mensagem. É possível cancelar a gravação ou parar; ao parar, o áudio é transcrito e a transcrição é enviada como mensagem.
@@ -170,6 +178,16 @@ A página **Custos** mostra o consumo e os valores estimados das chamadas de IA.
 O valor aparece como **Custo estimado** porque é calculado pelo preço listado de cada modelo; o valor realmente cobrado pelo provedor pode ser um pouco diferente. O cartão **Cache da entrada** mostra quanto do texto enviado à IA foi reaproveitado de chamadas anteriores, o que sai mais barato, e a **Economia estimada** que isso gerou. A tabela por contato tem a coluna **Cache**. Períodos anteriores a esse recurso não têm dado de cache e aparecem com "—"; eles não entram na porcentagem.
 
 [Abrir custos de IA]({{base_url}}/costs)
+
+### Ver o que ocupa espaço e apagar arquivos
+
+A página **Arquivos** (menu da engrenagem → **Arquivos**) mostra quanto espaço o WhatsBot está usando e lista os arquivos recebidos e os que você enviou pelo painel. Nela é possível ordenar por mais recentes, mais antigos, mais pesados ou por tipo, filtrar só fotos, vídeos, áudios ou documentos, abrir uma pasta (uma por contato e por dia), ver um arquivo antes de decidir e apagar um ou vários de uma vez. Antes de apagar, a tela mostra quantos MB serão liberados. Apagar não pode ser desfeito, mas as conversas continuam: a mensagem passa a mostrar “removido para liberar espaço”, com o botão **Baixar** para tentar buscar o arquivo de novo no WhatsApp (só funciona se ele ainda estiver lá).
+
+A tela só mostra o que é seguro apagar. Conversas, contatos, configurações, a conexão com o WhatsApp e os plugins nunca aparecem nem são mexidos; eles entram apenas no total como “Sistema e dados do app”. A opção **Só arquivos sem conversa** lista arquivos que nenhuma mensagem usa mais.
+
+Se você quiser acompanhar o espaço, use **Definir um limite de espaço** (em GB) para ver a barra de uso; sem limite, a tela mostra só o total. Quando o limite é definido pela hospedagem, o campo fica bloqueado e a tela avisa.
+
+[Abrir arquivos]({{base_url}}/arquivos)
 
 ### Ver o que aconteceu durante uma resposta
 

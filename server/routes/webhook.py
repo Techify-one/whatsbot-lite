@@ -12,6 +12,7 @@ from gowa.client import GOWASendError, extract_msg_id
 
 from db.repositories import contact_repo, message_repo
 from agent import group_mentions
+from server import media_policy
 from server.execution import astart_execution, aend_execution, atrack_step, prune_executions
 from server.helpers import _ok, parse_split_reply
 from plugins.events import emit as emit_event, apply_filter, emit_with_filter
@@ -422,6 +423,46 @@ def register_routes(app, deps):
     ws_manager = deps.ws_manager
     state = deps.state
     settings = deps.settings
+    statics_media_dir = deps.statics_media_dir
+    data_dir = settings.data_dir
+
+    # ── Media auto-download policy ─────────────────────────────────
+    # GOWA downloads everything (it only has a global switch). The matrix in
+    # ``media_autodownload`` decides what stays: a file the policy does not want
+    # is kept on disk while the message is processed (so the AI can still see
+    # it and transcription/description can read it) and dropped at the end of
+    # the cycle by ``_finalize_discards``.
+
+    def _should_discard(media_type: str | None, media_path: str | None,
+                        is_group: bool) -> bool:
+        if not media_path or statics_media_dir is None:
+            return False
+        if media_policy.policy_kind(media_type) is None:
+            return False
+        if media_policy.should_keep(settings.get("media_autodownload"), media_type, is_group):
+            return False
+        # Only ever discard a real file inside statics/media; anything else
+        # (odd path from a plugin filter, file already gone) is simply kept.
+        return media_policy.is_discardable_path(
+            media_path, statics_media_dir, data_dir) is not None
+
+    async def _finalize_discards(phone: str, jobs: list[tuple[str | None, str]]) -> None:
+        """Delete the files of messages the policy did not keep and flag them."""
+        for msg_id, path in jobs:
+            try:
+                target = media_policy.is_discardable_path(path, statics_media_dir, data_dir)
+                if target is None:
+                    continue
+                await asyncio.to_thread(target.unlink)
+                changed = await asyncio.to_thread(
+                    message_repo.mark_media_state, [path], "discarded")
+                if changed:
+                    await ws_manager.broadcast("message_media_updated", {
+                        "phone": phone, "msg_id": msg_id,
+                        "media_state": "discarded", "media_path": None,
+                    })
+            except Exception as e:  # never let cleanup break message handling
+                logger.warning("[Media] could not discard a file for %s: %s", phone, e)
 
     # ── Group Mention Helpers ──────────────────────────────────────
 
@@ -808,6 +849,14 @@ def register_routes(app, deps):
         state.sending[phone]=True so the webhook does not interrupt mid-send.
         """
         exec_id = await astart_execution(phone, "webhook")
+        # (msg_id, path) of received files the auto-download policy drops once
+        # the AI is done with them. Collected up front and handled in
+        # ``finally`` so every exit path (skipped reply, API error, a new
+        # message cancelling the cycle half-way) still cleans up the disk.
+        discard_jobs: list[tuple[str | None, str]] = [
+            (it.get("msg_id"), it["media_path"])
+            for it in items if it.get("discard") and it.get("media_path")
+        ]
         try:
             await atrack_step("webhook_received", {
                 "phone": phone,
@@ -929,6 +978,7 @@ def register_routes(app, deps):
                     "media_type": _saved_media_type,
                     "media_path": _saved_media_path,
                     "media_extras": item.get("media_extras"),
+                    "media_will_discard": bool(item.get("discard")),
                     "is_group": contact.is_group,
                     "source": "batch_media",
                     "ts": time.time(),
@@ -1044,6 +1094,9 @@ def register_routes(app, deps):
             raise
         except Exception as exc:
             await aend_execution(exec_id, error=str(exc))
+        finally:
+            if discard_jobs:
+                await _finalize_discards(phone, discard_jobs)
 
         max_exec = settings.get("max_executions", 200)
         try:
@@ -1778,6 +1831,9 @@ def register_routes(app, deps):
         media_path = parsed_msg.get("media_path", media_path)
         media_extras = parsed_msg.get("media_extras", media_extras)
 
+        # Auto-download policy: should the file survive this message?
+        discard_media = _should_discard(media_type, media_path, is_group)
+
         # Broadcast incoming message to frontend in real-time
         broadcast_msg: dict = {"role": "user", "content": display_text, "ts": time.time(), "msg_id": msg_id}
         if reply_to_msg_id:
@@ -1846,6 +1902,7 @@ def register_routes(app, deps):
                 "phone": phone, "text": saved_text, "msg_id": msg_id,
                 "media_type": media_type, "media_path": media_path,
                 "media_extras": media_extras,
+                "media_will_discard": discard_media,
                 "is_group": True, "group_jid": phone,
                 "source": "group_no_mention",
                 "ts": time.time(),
@@ -1864,6 +1921,8 @@ def register_routes(app, deps):
                             "ts": time.time(),
                         },
                     })
+            if discard_media and media_path:
+                await _finalize_discards(phone, [(msg_id, media_path)])
             return _ok({"status": "group_no_mention"})
 
         # Batch messages — accumulate and wait before responding
@@ -1876,6 +1935,7 @@ def register_routes(app, deps):
             "media_type": media_type,
             "media_path": media_path,
             "media_extras": media_extras,
+            "discard": discard_media,
             "msg_id": msg_id,
             "reply_to_msg_id": reply_to_msg_id,
         })

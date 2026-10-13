@@ -15,8 +15,13 @@ def add(contact_id: int, role: str, content: str, *,
         media_type: str | None = None, media_path: str | None = None,
         status: str | None = None, msg_id: str | None = None,
         reply_to_msg_id: str | None = None,
+        media_state: str | None = None,
         ts: float | None = None) -> dict:
-    """Insert a message and return it as a dict."""
+    """Insert a message and return it as a dict.
+
+    ``media_state`` is ``"discarded"`` when the file was deliberately not kept
+    (auto-download policy); the row then has ``media_type`` but no ``media_path``.
+    """
     ts = ts or time.time()
     with get_engine().begin() as conn:
         result = conn.execute(sa_insert(messages).values(
@@ -29,6 +34,7 @@ def add(contact_id: int, role: str, content: str, *,
             status=status,
             msg_id=msg_id,
             reply_to_msg_id=reply_to_msg_id,
+            media_state=media_state,
         ))
         new_id = result.inserted_primary_key[0]
     return {
@@ -435,6 +441,9 @@ def _row_to_dict(row) -> dict:
         d["media_type"] = row["media_type"]
     if row["media_path"]:
         d["media_path"] = row["media_path"]
+    # `media_state` may be absent on rows read before the column existed.
+    if row.get("media_state"):
+        d["media_state"] = row["media_state"]
     # `revoked` may be absent on very old rows read before the column existed.
     # 1 = "para todos", 2 = "para mim" (see _REVOKE_CODE).
     if row.get("revoked"):
@@ -452,3 +461,81 @@ def _row_to_dict(row) -> dict:
         d["reply_to_msg_id"] = row["reply_to_msg_id"]
     d["_id"] = row["id"]
     return d
+
+
+# ── Media files (download policy + file manager) ──────────────────────
+
+def set_media(message_id: int, media_path: str | None, media_state: str | None) -> None:
+    """Point a message at a (re)downloaded file, or flag it as discarded/removed."""
+    with get_engine().begin() as conn:
+        conn.execute(
+            sa_update(messages).where(messages.c.id == message_id)
+            .values(media_path=media_path, media_state=media_state)
+        )
+
+def mark_media_removed(paths: list[str]) -> int:
+    """Flag every message that points at one of ``paths`` as ``removed``."""
+    return mark_media_state(paths, "removed")
+
+def mark_media_state(paths: list[str], state: str) -> int:
+    """Set ``media_state`` on every message that points at one of ``paths``.
+
+    The path is cleared too, so the chat shows a placeholder instead of a broken
+    image. Returns how many messages were updated.
+    """
+    paths = [p for p in dict.fromkeys(paths) if p]
+    if not paths:
+        return 0
+    updated = 0
+    with get_engine().begin() as conn:
+        # Chunked: SQLite caps the number of bound parameters per statement.
+        for i in range(0, len(paths), 500):
+            chunk = paths[i:i + 500]
+            result = conn.execute(
+                sa_update(messages)
+                .where(messages.c.media_path.in_(chunk))
+                .values(media_path=None, media_state=state)
+            )
+            updated += result.rowcount or 0
+    return updated
+
+def paths_with_messages(paths: list[str]) -> dict[str, dict]:
+    """Map each known ``media_path`` in ``paths`` to its message and contact.
+
+    Used by the file manager to show where a file came from. Paths without a
+    message are simply absent (orphans).
+    """
+    from db.tables import contacts  # local: keeps this module's import graph flat
+
+    paths = [p for p in dict.fromkeys(paths) if p]
+    found: dict[str, dict] = {}
+    if not paths:
+        return found
+    with get_engine().connect() as conn:
+        for i in range(0, len(paths), 500):
+            chunk = paths[i:i + 500]
+            rows = conn.execute(
+                select(
+                    messages.c.media_path, messages.c.media_type, messages.c.ts,
+                    messages.c.msg_id, contacts.c.phone, contacts.c.name,
+                    contacts.c.is_group, contacts.c.group_name,
+                )
+                .select_from(messages.join(contacts, contacts.c.id == messages.c.contact_id))
+                .where(messages.c.media_path.in_(chunk))
+            ).mappings().all()
+            for r in rows:
+                found.setdefault(r["media_path"], dict(r))
+    return found
+
+def get_media_target(contact_id: int, msg_id: str) -> dict | None:
+    """The message row (id, media_type, media_state) a Baixar click refers to."""
+    if not msg_id:
+        return None
+    with get_engine().connect() as conn:
+        row = conn.execute(
+            select(messages.c.id, messages.c.media_type, messages.c.media_path,
+                   messages.c.media_state, messages.c.role)
+            .where((messages.c.contact_id == contact_id) & (messages.c.msg_id == msg_id))
+            .limit(1)
+        ).mappings().first()
+    return dict(row) if row else None

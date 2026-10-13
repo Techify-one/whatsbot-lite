@@ -109,6 +109,27 @@ def set_pinned(contact_id: int, pinned: bool) -> None:
         ))
 
 
+def display_names(phones: list[str]) -> dict[str, dict]:
+    """Display info for contacts, keyed by the phone/JID asked for.
+
+    Only the columns the file manager needs; nothing is created. Unknown
+    phones are simply absent.
+    """
+    phones = [p for p in dict.fromkeys(phones) if p]
+    found: dict[str, dict] = {}
+    if not phones:
+        return found
+    with get_engine().connect() as conn:
+        for i in range(0, len(phones), 500):
+            rows = conn.execute(
+                select(contacts.c.phone, contacts.c.name, contacts.c.is_group, contacts.c.group_name)
+                .where(contacts.c.phone.in_(phones[i:i + 500]))
+            ).mappings().all()
+            for r in rows:
+                label = (r["group_name"] if r["is_group"] else r["name"]) or ""
+                found[r["phone"]] = {"name": label.lstrip("~").strip(), "is_group": bool(r["is_group"])}
+    return found
+
 def get_by_phone(phone: str) -> dict | None:
     """Get a contact by phone number. Checks BR phone variants."""
     variants = _br_phone_variants(phone)
