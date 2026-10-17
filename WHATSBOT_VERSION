@@ -1,6 +1,10 @@
 {
-  "version": "0.2.10",
+  "version": "0.2.11",
   "changelog": [
+    {
+      "version": "0.2.11",
+      "description": "- Nova tela Arquivos: veja, busque e apague os arquivos recebidos e enviados\n- Download automático de mídia configurável por tipo (áudio, imagem, vídeo, documento), em conversas individuais e em grupos\n- Botão Baixar para recuperar um arquivo que não foi guardado\n- Busca por nome, texto, conversa e período; o nome mostrado é o que o remetente deu ao arquivo"
+    },
     {
       "version": "0.2.10",
       "description": "- Instale o WhatsBot-Lite na tela inicial do Android ou iPhone usando o endereço HTTPS do seu painel\n- Novo guia Instalar no celular no menu da engrenagem, com instalação pelo navegador quando disponível\n- Ícone próprio e abertura como aplicativo; tela de conexão indisponível sem guardar conversas, credenciais ou respostas da API no cache do PWA\n- O servidor continua necessário e a atualização da instalação é manual\n- O atualizador consulta diretamente o endereço atual do repositório WhatsBot-Lite"
