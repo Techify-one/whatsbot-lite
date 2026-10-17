@@ -386,7 +386,7 @@ def test_release_lookup_falls_back_without_github_api():
         def fake_urlopen(request, timeout=0):
             url = request.full_url
             if url.endswith("/releases/latest"):
-                return FakeResponse("https://github.com/Techify-one/whatsbot/releases/tag/v1.2.3")
+                return FakeResponse("https://github.com/Techify-one/whatsbot-lite/releases/tag/v1.2.3")
             if "/v1.2.3/WHATSBOT_VERSION" in url:
                 return FakeResponse(url, version_payload)
             raise AssertionError(f"URL inesperada: {url}")

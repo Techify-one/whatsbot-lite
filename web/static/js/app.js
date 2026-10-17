@@ -1,6 +1,7 @@
 import { h, render } from 'preact';
 import { useState, useEffect, useCallback, useRef } from 'preact/hooks';
 import htm from 'htm';
+import { InstallApp } from './components/InstallApp.js';
 import { Dashboard } from './components/Dashboard.js';
 import { Sandbox } from './components/Sandbox.js';
 import { Contacts } from './components/Contacts.js';
@@ -9,6 +10,7 @@ import { Executions } from './components/Executions.js';
 import { LoginScreen } from './components/LoginScreen.js';
 import { PluginsManager } from './components/PluginsManager.js';
 import { PluginScreen } from './components/PluginScreen.js';
+import { loadPluginExtensions } from './plugins/slots.js';
 import { ToolsManager } from './components/ToolsManager.js';
 import { FileManager } from './components/FileManager.js';
 import { Chat } from './components/Chat.js';
@@ -227,6 +229,7 @@ function GearMenu({ tab, onTabChange, pluginScreens, hasPassword, onLogout, acco
           >Gerenciar Plugins</${MenuItem}>
 
           <div class="border-t border-wa-border my-1"></div>
+          <${InstallApp} />
           <button
             onClick=${toggleDark}
             class="w-full text-left px-4 py-2.5 text-[14px] hover:bg-wa-hover transition-colors flex items-center gap-2 text-wa-text"
@@ -328,6 +331,7 @@ function App({ onLogout, hasPassword }) {
       .then(r => r.json())
       .then(res => {
         if (!res || !res.ok) return;
+        loadPluginExtensions(res.data.plugins);
         const screens = (res.data.plugins || []).flatMap(p =>
           (p.screens || [])
             .filter(s => !s.config)  // config screens live in the Plugins tab, not the gear menu

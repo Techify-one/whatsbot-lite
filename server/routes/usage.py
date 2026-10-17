@@ -9,7 +9,7 @@ import httpx
 from config.settings import LLM_API_BASE_URL
 from db.repositories import usage_repo, contact_repo
 from server.helpers import _ok
-from server.routes.config import get_models_cache
+from server.routes.config import MODELS_PATHS, get_models_cache
 
 logger = logging.getLogger(__name__)
 
@@ -20,9 +20,16 @@ def _get_model_pricing_details(model_id: str, api_key: str = "") -> dict:
     if not _models_cache["data"]:
         try:
             headers = {"Authorization": f"Bearer {api_key}"} if api_key else {}
-            resp = httpx.get(f"{LLM_API_BASE_URL}/models", headers=headers, timeout=15)
-            resp.raise_for_status()
-            raw = resp.json()
+            raw = None
+            for i, path in enumerate(MODELS_PATHS):
+                try:
+                    resp = httpx.get(f"{LLM_API_BASE_URL}{path}", headers=headers, timeout=15)
+                    resp.raise_for_status()
+                    raw = resp.json()
+                    break
+                except Exception:
+                    if i == len(MODELS_PATHS) - 1:
+                        raise
             models = []
             for m in raw.get("data", []):
                 arch = m.get("architecture", {})

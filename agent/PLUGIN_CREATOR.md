@@ -93,6 +93,28 @@ filters: []
 
 Uma tela de uso normal aparece no menu da engrenagem. Uma tela com `config: true` aparece dentro do modal
 **Configurar** do plugin e não no menu. Opções simples devem usar `settings.py` em vez de uma tela própria.
+
+Para colocar um botão ou atalho dentro de uma tela do WhatsBot-Lite (hoje: o cabeçalho da conversa), declare
+`frontend_extends: /plugins/meu_plugin/static/extends.js` no manifesto e use `whatsbot_api_version:
+">=1.3,<2.0"`. O caminho precisa começar com `/plugins/<id>/static/`. O módulo exporta uma função padrão,
+chamada uma vez ao abrir o painel, que registra um componente Preact no slot `chat.header.actions`; ele recebe
+`phone`, `contact`, `info`, `isGroup` e `rawName` como props. Sem necessidade de botão no cabeçalho, não use
+`frontend_extends`.
+
+```js
+import { h } from 'preact';
+import htm from 'htm';
+const html = htm.bind(h);
+
+function Acao({ phone }) {
+  return html`<button class="wa-field px-2 py-1 rounded text-sm"
+    onClick=${() => fetch('/api/plugins/meu_plugin/ping', { method: 'POST' })}>Ping ${phone}</button>`;
+}
+
+export default function ({ addSlot }) {
+  addSlot('chat.header.actions', Acao);
+}
+```
 Dependências de terceiros importadas pelo código precisam constar em `dependencies`; `fastapi`, `pydantic`,
 `sqlalchemy`, `httpx` e módulos do WhatsBot-Lite já pertencem ao host e não são declarados.
 

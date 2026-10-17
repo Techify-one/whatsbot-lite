@@ -10,6 +10,18 @@ Ao responder:
 - Se esta base não cobrir a dúvida, consulte as referências do sistema antes de responder.
 - Se a interface ou o comportamento encontrado nas referências divergir desta base, siga a versão atual do sistema e explique o caminho correto.
 
+## Instalar no Android ou iPhone
+
+Abra o [WhatsBot-Lite]({{base_url}}/) pelo endereço HTTPS da sua instalação. Depois de entrar e concluir a configuração inicial, abra a engrenagem no canto superior direito e escolha **Instalar no celular**.
+
+- **Android:** use o Chrome. Quando disponível, toque em **Instalar agora** e confirme no navegador. Também pode usar o menu do Chrome → **Instalar app** ou **Adicionar à tela inicial**.
+- **iPhone/iPad:** abra no Safari, toque em **Compartilhar → Adicionar à Tela de Início**. Se houver a opção **Abrir como App da Web**, deixe ativada e toque em **Adicionar**.
+- A opção **Fechar** sai do guia sem instalar. Cancelar o aviso do navegador mantém o painel funcionando normalmente.
+- O endereço precisa ser acessível pelo celular e usar HTTPS válido. `localhost` no celular não abre o servidor do computador; HTTP com IP da rede local não oferece a instalação completa.
+- O ícone abre o painel como aplicativo. É preciso internet e manter o servidor WhatsBot-Lite e a conexão WhatsApp funcionando. O bot não passa a rodar dentro do celular.
+- Sem conexão, uma nova abertura mostra uma página genérica para tentar novamente. Conversas, mídias, credenciais e respostas da API não são guardadas no cache offline do PWA. O login existente continua usando o armazenamento do navegador e pode ser solicitado de novo ao instalar.
+- Esta versão não adiciona notificações push com o aplicativo fechado. Para remover o ícone, use as opções do sistema do celular.
+
 ## Conversas e painel principal
 
 ### Conversas do WhatsApp
@@ -319,3 +331,10 @@ Pesquise nesta ordem:
 4. A estrutura e as migrations do banco, quando forem necessárias para confirmar o comportamento.
 
 Não leia nem revele registros de conversas, contatos, credenciais ou outros dados privados. Depois da pesquisa, traduza a descoberta para passos simples e inclua o link direto disponível.
+
+### Origem das atualizações
+
+O repositório WhatsBot foi renomeado para WhatsBot-Lite. O atualizador consulta
+diretamente a última release estável de `Techify-one/whatsbot-lite`, não a branch
+main. Depois que uma nova release é publicada, ela pode levar até cinco minutos
+para aparecer devido ao cache da consulta. Abra [Atualizar WhatsBot-Lite]({{base_url}}/painel?aba=sistema#update).

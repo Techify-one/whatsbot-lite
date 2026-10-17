@@ -1,0 +1,95 @@
+name: Publish PWA v0.2.10 once
+on:
+  push:
+    branches: [main]
+    paths: [.github/workflows/release-pwa-0.2.10.yml]
+permissions:
+  contents: write
+concurrency:
+  group: release-pwa-v0.2.10
+  cancel-in-progress: false
+jobs:
+  publish:
+    if: github.repository == 'Techify-one/whatsbot-lite'
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      # No checkout, third-party action, permanent token, or arbitrary-version input.
+      - name: Validate exact source and publish only v0.2.10
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TARGET_SHA: ${{ github.sha }}
+        shell: bash
+        run: |
+          python3 - <<'PY'
+          import base64
+          import json
+          import os
+          import re
+          import urllib.error
+          import urllib.request
+
+          REPO = 'Techify-one/whatsbot-lite'
+          TAG = 'v0.2.10'
+          sha = os.environ['TARGET_SHA']
+          if not re.fullmatch(r'[0-9a-f]{40}', sha):
+              raise SystemExit('Invalid target commit')
+
+          def api(path, data=None, optional=False):
+              request = urllib.request.Request(
+                  'https://api.github.com/repos/' + REPO + '/' + path,
+                  data=json.dumps(data).encode() if data is not None else None,
+                  headers={'Authorization': 'Bearer ' + os.environ['GH_TOKEN'],
+                           'Accept': 'application/vnd.github+json',
+                           'X-GitHub-Api-Version': '2022-11-28',
+                           'User-Agent': 'WhatsBot-Lite-release-0.2.10'},
+              )
+              try:
+                  with urllib.request.urlopen(request, timeout=30) as response:
+                      return json.load(response)
+              except urllib.error.HTTPError as error:
+                  if optional and error.code == 404:
+                      return None
+                  raise
+
+          def content(path):
+              result = api('contents/' + path + '?ref=' + sha)
+              return base64.b64decode(result['content']).decode('utf-8')
+
+          version = json.loads(content('WHATSBOT_VERSION'))
+          if version['version'] != '0.2.10' or version['changelog'][0]['version'] != '0.2.10':
+              raise SystemExit('Source version must be exactly 0.2.10')
+          if 'GITHUB_REPO = "Techify-one/whatsbot-lite"' not in content('server/routes/update.py'):
+              raise SystemExit('Updater repository was not migrated')
+          if json.loads(content('web/manifest.webmanifest'))['display'] != 'standalone':
+              raise SystemExit('PWA manifest is missing')
+          if api('git/ref/heads/main')['object']['sha'] != sha:
+              raise SystemExit('Main advanced; refusing to publish a stale target')
+
+          existing = api('releases/tags/' + TAG, optional=True)
+          tag = api('git/ref/tags/' + TAG, optional=True)
+          if existing is not None:
+              if not tag or tag['object']['type'] != 'commit' or tag['object']['sha'] != sha:
+                  raise SystemExit('Existing release targets a different commit; no overwrite')
+              if existing['draft'] or existing['prerelease']:
+                  raise SystemExit('Existing release is not stable; no overwrite')
+              print('Release already published:', existing['html_url'])
+          else:
+              if tag is not None:
+                  raise SystemExit('Tag already exists without this release; no overwrite')
+              body = '## O que mudou\n\n' + version['changelog'][0]['description']
+              body += ('\n\nInstalação PWA requer HTTPS e servidor ligado. '
+                       'Esta release não adiciona WhatsApp offline nem notificações push. '
+                       '25 testes focados passaram; suíte completa e instalação física '
+                       'Android/iPhone ainda precisam de validação.')
+              created = api('releases', {
+                  'tag_name': TAG, 'target_commitish': sha, 'name': TAG,
+                  'body': body, 'draft': False, 'prerelease': False, 'make_latest': 'true',
+              })
+              print('Published:', created['html_url'])
+          latest = api('releases/latest')
+          tag = api('git/ref/tags/' + TAG)
+          if latest['tag_name'] != TAG or tag['object']['sha'] != sha:
+              raise SystemExit('Latest release/tag verification failed')
+          print('Verified latest release and exact target:', TAG, sha)
+          PY

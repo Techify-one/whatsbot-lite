@@ -17,6 +17,12 @@ from typing import Any
 
 logger = logging.getLogger(__name__)
 
+# 1.3.0: ADDITIVE — ``frontend_extends`` in the manifest: a plugin may ship an ES
+# module (under its own ``/plugins/<id>/`` static path) that the panel imports once
+# at boot. Its default export receives ``{pluginId, apiBase, addSlot}`` and can fill
+# named UI slots (today: ``chat.header.actions``, in the conversation header). A
+# plugin that needs it declares ``">=1.3,<2.0"``; everything else is unaffected.
+#
 # 1.2.0: ADDITIVE — public plugin runtime helpers
 # ``send_whatsapp_message`` and ``get_plugin_setting``. Plugins can now send
 # through the active GOWA client and read their declarative settings without
@@ -30,7 +36,7 @@ logger = logging.getLogger(__name__)
 # delivers a text the other side silently ignores. ``None``/``""`` on either one
 # aborts and the wizard refuses to send. A plugin that needs them declares
 # ``">=1.1,<2.0"``; everything else stays on ``">=1.0,<2.0"``.
-WHATSBOT_API_VERSION = "1.2.0"
+WHATSBOT_API_VERSION = "1.3.0"
 
 _ID_RE = re.compile(r"^[a-z][a-z0-9_]{0,31}$")
 
@@ -56,6 +62,8 @@ class PluginManifest:
     # touches.
     events: list[str] = dataclasses.field(default_factory=list)
     filters: list[str] = dataclasses.field(default_factory=list)
+    # ES module the panel imports at boot to fill UI slots (API >= 1.3).
+    frontend_extends: str = ""
     raw: dict = dataclasses.field(default_factory=dict)
 
     def to_public_dict(self) -> dict:
@@ -72,6 +80,7 @@ class PluginManifest:
             "dependencies": self.dependencies,
             "events": self.events,
             "filters": self.filters,
+            "frontend_extends": self.frontend_extends,
         }
 
 
@@ -154,6 +163,17 @@ def _build_manifest(data: dict, plugin_dir: Path) -> PluginManifest:
             "config": bool(s.get("config", False)),
         })
 
+    frontend_extends = data.get("frontend_extends") or ""
+    if frontend_extends:
+        # Same rule as screen components: a plugin may only load code from its own
+        # static folder, never an arbitrary URL.
+        expected_prefix = f"/plugins/{pid}/static/"
+        if not isinstance(frontend_extends, str) or not frontend_extends.startswith(expected_prefix):
+            raise ValueError(
+                f"manifest 'frontend_extends' must start with {expected_prefix} "
+                f"(got {frontend_extends!r})"
+            )
+
     permissions = [str(p) for p in (data.get("permissions") or []) if isinstance(p, str)]
     deps = [str(d) for d in (data.get("dependencies") or []) if isinstance(d, str)]
     events_declared = [str(e) for e in (data.get("events") or []) if isinstance(e, str)]
@@ -173,6 +193,7 @@ def _build_manifest(data: dict, plugin_dir: Path) -> PluginManifest:
         dependencies=deps,
         events=events_declared,
         filters=filters_declared,
+        frontend_extends=str(frontend_extends),
         raw=data,
     )
 

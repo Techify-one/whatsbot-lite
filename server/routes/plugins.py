@@ -231,6 +231,7 @@ def register_routes(app, deps):
                 "id": loaded.id,
                 "name": loaded.manifest.name,
                 "version": loaded.manifest.version,
+                "frontend_extends": loaded.manifest.frontend_extends,
                 "screens": [
                     {**s, "pluginId": loaded.id} for s in loaded.manifest.screens
                 ],
