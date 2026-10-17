@@ -20,21 +20,26 @@ from __future__ import annotations
 
 import base64
 import binascii
+import codecs
 import logging
 import os
+import re
 import stat
 import threading
 import time
 from dataclasses import dataclass, field
 from pathlib import Path, PurePosixPath
-from typing import NamedTuple
+from typing import Callable, NamedTuple
 
 logger = logging.getLogger(__name__)
 
 # root key (what the API exposes) -> directory name under ``statics/``
 ROOTS: dict[str, str] = {"received": "media", "sent": "operator"}
 
-IMAGE_EXT = frozenset({".jpg", ".jpeg", ".png", ".gif", ".webp", ".bmp", ".heic", ".heif"})
+IMAGE_EXT = frozenset({
+    ".jpg", ".jpeg", ".jpe", ".jfif", ".pjpeg", ".pjp", ".png", ".gif", ".webp", ".avif",
+    ".bmp", ".tif", ".tiff", ".heic", ".heif",
+})
 AUDIO_EXT = frozenset({".ogg", ".opus", ".mp3", ".m4a", ".aac", ".wav", ".amr", ".oga"})
 VIDEO_EXT = frozenset({".mp4", ".mov", ".mkv", ".webm", ".3gp", ".avi", ".m4v"})
 
@@ -42,6 +47,16 @@ KINDS = ("image", "audio", "video", "document")
 SORTS = ("date", "size", "name", "kind")
 
 MAX_DELETE_IDS = 1000
+
+MAX_NAME_LEN = 200
+
+#: Names our own frontend invents when the browser gives none (mic recording,
+#: pasted screenshot). They say nothing about the file, so they are not kept.
+_GENERIC_UPLOAD_NAMES = frozenset({"image.png", "voice.ogg", "blob"})
+
+#: Characters Windows refuses in a file name (a download saved on Windows would
+#: otherwise be renamed by the browser or fail), plus every control character.
+_NAME_FORBIDDEN = frozenset('<>:"|?*') | {chr(c) for c in range(32)} | {chr(127)}
 
 
 class FileAccessError(ValueError):
@@ -64,6 +79,87 @@ class DeleteResult:
     removed_paths: list[str] = field(default_factory=list)
 
 
+def clean_name(raw) -> str:
+    """The name a person gave a file, made safe to show and to download as.
+
+    Keeps only the last path component (a hostile ``..\\..\\x.exe`` becomes
+    ``x.exe``), drops characters no file system accepts, and caps the length
+    without cutting the extension. Returns ``""`` when nothing usable is left,
+    which callers read as "this file has no name of its own". Idempotent.
+    """
+    if not isinstance(raw, str):
+        return ""
+    name = raw.replace("\\", "/").rsplit("/", 1)[-1]
+    name = "".join(ch for ch in name if ch not in _NAME_FORBIDDEN)
+    name = name.strip().rstrip(" .")
+    if not name:
+        return ""
+    if len(name) > MAX_NAME_LEN:
+        stem, ext = os.path.splitext(name)
+        ext = ext[:16]
+        name = stem[: MAX_NAME_LEN - len(ext)].rstrip(" .") + ext
+    return name
+
+
+def upload_name(raw) -> str:
+    """:func:`clean_name` for a file the operator picked, minus app-made defaults."""
+    name = clean_name(raw)
+    return "" if name.lower() in _GENERIC_UPLOAD_NAMES else name
+
+
+def final_name(disk_name: str, wanted) -> str:
+    """The name to show and to download a file as.
+
+    ``wanted`` is what the sender called it; with no usable name the on-disk name
+    stays. A sender name without an extension borrows the one on disk, so the
+    download still opens ("Relatorio" -> "Relatorio.pdf").
+    """
+    name = clean_name(wanted)
+    if not name:
+        return disk_name
+    if not os.path.splitext(name)[1]:
+        name += os.path.splitext(disk_name)[1]
+    return name
+
+
+# Documents saved before ``messages.media_name`` existed carry the name only in
+# the text: "[Documento recebido: nome.ext]" (+ caption on the next lines). The
+# name may itself contain "]", so the closing bracket must end the line.
+_DOC_NAME_RE = re.compile(r"^\[Documento (?:recebido|enviado): (.+?)\](?:\n|$)")
+
+
+def name_from_content(content: str) -> str:
+    """File name out of a document message's text, or ``""`` when it has none."""
+    m = _DOC_NAME_RE.match(content or "")
+    if not m:
+        return ""
+    name = clean_name(m.group(1))
+    # The placeholder the webhook writes when GOWA never told the name.
+    return "" if name.lower() == "documento" else name
+
+
+# What the webhook wraps around the words a person can actually search for: the
+# placeholder it writes when there is no caption ("[Áudio recebido]", "[Imagem
+# enviada]", "[Documento recebido: nome.ext]", "[Sticker]") and the labels it puts
+# in front of a transcription or description. Left in, a search for "recebido" or
+# "áudio" would match every file.
+_CONTENT_TAG_RE = re.compile(
+    r"\[(?:Áudio|Vídeo|Imagem|Documento) [^\]\n]*\]"
+    r"|\[Sticker\]"
+    r"|\[(?:Transcrição do áudio|Descrição da imagem|Conteúdo do documento)\]:?"
+)
+
+
+def searchable_text(content: str) -> str:
+    """The words in a media message's text that a search should look at.
+
+    Caption, audio transcription and image description, without the bracketed
+    placeholders and labels the app adds around them. Returns ``""`` when nothing
+    but a placeholder is left.
+    """
+    return _CONTENT_TAG_RE.sub(" ", content or "").strip()
+
+
 def kind_of(name: str) -> str:
     ext = os.path.splitext(name)[1].lower()
     if ext in IMAGE_EXT:
@@ -73,6 +169,118 @@ def kind_of(name: str) -> str:
     if ext in VIDEO_EXT:
         return "video"
     return "document"
+
+
+# ── what the viewer may show inline ────────────────────────────────────
+#
+# The viewer decides by the Content-Type this module picks, never by the file
+# name, so the choice lives in one place. The OS ``mimetypes`` table is not used
+# first because it differs between Windows and Linux and misses .jfif/.pjpeg.
+
+#: Sent inline even when some browsers cannot decode it; the viewer falls back
+#: to a download button then (HEIC and TIFF outside Safari, AMR, ...).
+_MIME_BY_EXT: dict[str, str] = {
+    **dict.fromkeys((".jpg", ".jpeg", ".jpe", ".jfif", ".pjpeg", ".pjp"), "image/jpeg"),
+    ".png": "image/png", ".gif": "image/gif", ".webp": "image/webp", ".avif": "image/avif",
+    ".bmp": "image/bmp", ".tif": "image/tiff", ".tiff": "image/tiff",
+    ".heic": "image/heic", ".heif": "image/heif",
+    **dict.fromkeys((".ogg", ".oga", ".opus"), "audio/ogg"),
+    ".mp3": "audio/mpeg", ".m4a": "audio/mp4", ".aac": "audio/aac", ".wav": "audio/wav",
+    ".flac": "audio/flac", ".amr": "audio/amr",
+    **dict.fromkeys((".mp4", ".m4v"), "video/mp4"),
+    ".mov": "video/quicktime", ".webm": "video/webm", ".mkv": "video/x-matroska",
+    ".3gp": "video/3gpp", ".avi": "video/x-msvideo",
+    ".pdf": "application/pdf",
+    **dict.fromkeys(
+        (".txt", ".log", ".csv", ".tsv", ".json", ".md", ".xml", ".yaml", ".yml", ".ini", ".srt", ".vtt"),
+        "text/plain",
+    ),
+}
+
+#: Active content: shown as a download whatever it contains, so a file a contact
+#: sent can never run inside the app's origin.
+_NEVER_INLINE_EXT = frozenset({".html", ".htm", ".xhtml", ".svg", ".svgz"})
+
+_SNIFF_BYTES = 4096
+#: Control characters that do not occur in text (tab, LF, FF, CR and ESC do).
+_BINARY_BYTES = bytes(b for b in range(32) if b not in (9, 10, 12, 13, 27))
+
+
+def _sniff_media(head: bytes) -> str | None:
+    """Recognise a media/PDF file by its first bytes (no extension, or a wrong one)."""
+    if head.startswith(b"\xff\xd8\xff"):
+        return "image/jpeg"
+    if head.startswith(b"\x89PNG\r\n\x1a\n"):
+        return "image/png"
+    if head[:6] in (b"GIF87a", b"GIF89a"):
+        return "image/gif"
+    if head[:4] == b"RIFF" and head[8:12] == b"WEBP":
+        return "image/webp"
+    if head[:4] == b"RIFF" and head[8:12] == b"WAVE":
+        return "audio/wav"
+    if head.startswith(b"%PDF-"):
+        return "application/pdf"
+    if head.startswith(b"OggS"):
+        return "audio/ogg"
+    if head.startswith(b"ID3") or head[:2] in (b"\xff\xfb", b"\xff\xf3", b"\xff\xf2"):
+        return "audio/mpeg"
+    if head[4:8] == b"ftyp":
+        brand = head[8:12]
+        if brand in (b"heic", b"heix", b"heim", b"heis", b"mif1", b"msf1"):
+            return "image/heic"
+        if brand == b"avif":
+            return "image/avif"
+        return "audio/mp4" if brand in (b"M4A ", b"M4B ") else "video/mp4"
+    if head.startswith(b"\x1a\x45\xdf\xa3"):
+        return "video/webm"
+    return None
+
+
+def _looks_like_text(head: bytes) -> bool:
+    if not head or head.translate(None, _BINARY_BYTES) != head:
+        return False
+    try:
+        # Incremental, so a multibyte character cut by the 4 KB window is fine.
+        codecs.getincrementaldecoder("utf-8")().decode(head)
+    except UnicodeDecodeError:
+        return False
+    return True
+
+
+def preview_mime(path: Path) -> str | None:
+    """Content-Type to show ``path`` inline, or ``None`` when it is download-only.
+
+    ``path`` must already be validated by :meth:`FileManager.resolve`. Order:
+    extension table, then the file's first bytes (media signature, else "is it
+    plain UTF-8 text?"). HTML and SVG return ``None`` whatever their content.
+    """
+    ext = path.suffix.lower()
+    if ext in _NEVER_INLINE_EXT:
+        return None
+    if ext in _MIME_BY_EXT:
+        return _MIME_BY_EXT[ext]
+    try:
+        with open(path, "rb") as f:
+            head = f.read(_SNIFF_BYTES)
+    except OSError:
+        return None
+    return _sniff_media(head) or ("text/plain" if _looks_like_text(head) else None)
+
+
+#: Extension to give a file that arrived without one, by what it really is.
+#: Plain text is left out on purpose: there is no honest guess between .txt/.csv/...
+_EXT_BY_MIME: dict[str, str] = {
+    "image/jpeg": ".jpg", "image/png": ".png", "image/gif": ".gif", "image/webp": ".webp",
+    "image/avif": ".avif", "image/heic": ".heic",
+    "audio/ogg": ".ogg", "audio/mpeg": ".mp3", "audio/mp4": ".m4a", "audio/wav": ".wav",
+    "video/mp4": ".mp4", "video/webm": ".webm",
+    "application/pdf": ".pdf",
+}
+
+
+def extension_for(mime: str | None) -> str:
+    """``.jpg`` for ``image/jpeg`` and so on; ``""`` when the type is unknown."""
+    return _EXT_BY_MIME.get(mime or "", "")
 
 
 def _encode_id(root: str, rel: str) -> str:
@@ -224,10 +432,27 @@ class FileManager:
         kind: str = "",
         known_paths: set[str] | None = None,
         orphans_only: bool = False,
+        date_from: float | None = None,
+        date_to: float | None = None,
+        selector: Callable[[Entry, str], dict | None] | None = None,
         offset: int = 0,
         limit: int = 100,
+        name_resolver: Callable[[list[str]], dict[str, str]] | None = None,
     ) -> dict:
-        """One page of a folder (or of every file under it when ``flat``)."""
+        """One page of a folder (or of every file under it when ``flat``).
+
+        ``date_from`` (inclusive) and ``date_to`` (exclusive) bound the file's
+        modified time, the same date the listing shows. ``selector`` is the hook
+        for filters that need the database (conversation, text search): it gets
+        each file and its ``media_path`` and returns ``None`` to drop it, or a
+        dict of extra fields to merge into its row (``{}`` keeps it as is). This
+        module stays free of database access; the caller supplies the knowledge.
+
+        ``name_resolver`` maps ``media_path`` strings to the name the sender gave
+        the file. When it knows one the row's ``name`` becomes that instead of the
+        on-disk name. Sorting by name needs every name up front; any other sort
+        resolves just the page that is returned.
+        """
         if root not in self.roots:
             raise FileAccessError("invalid root")
         sort = sort if sort in SORTS else "date"
@@ -243,6 +468,22 @@ class FileManager:
         entries = [e for e in self.scan(root) if e.rel.startswith(prefix)]
         if kind in KINDS:
             entries = [e for e in entries if e.kind == kind]
+        if date_from is not None:
+            entries = [e for e in entries if e.mtime >= date_from]
+        if date_to is not None:
+            entries = [e for e in entries if e.mtime < date_to]
+
+        extras: dict[str, dict] = {}
+        if selector is not None:
+            kept: list[Entry] = []
+            for e in entries:
+                extra = selector(e, self.db_path(root, e.rel))
+                if extra is None:
+                    continue
+                kept.append(e)
+                if extra:
+                    extras[e.rel] = extra
+            entries = kept
 
         def orphan(e: Entry) -> bool:
             return known_paths is not None and self.db_path(root, e.rel) not in known_paths
@@ -250,10 +491,15 @@ class FileManager:
         if orphans_only:
             entries = [e for e in entries if orphan(e)]
 
+        def file_row(e: Entry) -> dict:
+            row = self._file_row(root, e, orphan(e))
+            row.update(extras.get(e.rel, {}))
+            return row
+
         rows: list[dict] = []
         if flat:
             for e in entries:
-                rows.append(self._file_row(root, e, orphan(e)))
+                rows.append(file_row(e))
         else:
             dirs: dict[str, dict] = {}
             for e in entries:
@@ -265,7 +511,7 @@ class FileManager:
                     d["count"] += 1
                     d["mtime"] = max(d["mtime"], e.mtime)
                 else:
-                    rows.append(self._file_row(root, e, orphan(e)))
+                    rows.append(file_row(e))
             for name, d in dirs.items():
                 rel = f"{prefix}{name}"
                 rows.append({
@@ -273,6 +519,11 @@ class FileManager:
                     "kind": "dir", "size": d["size"], "count": d["count"],
                     "mtime": d["mtime"], "rel": rel,
                 })
+
+        named = False
+        if name_resolver and sort == "name":
+            self._apply_names(root, rows, name_resolver)
+            named = True
 
         sort_key = {
             "date": lambda r: r["mtime"],
@@ -284,6 +535,8 @@ class FileManager:
 
         total = len(rows)
         page = rows[offset:offset + limit]
+        if name_resolver and not named:
+            self._apply_names(root, page, name_resolver)
         return {
             "items": page,
             "total": total,
@@ -292,6 +545,14 @@ class FileManager:
             "path": prefix.rstrip("/"),
             "total_bytes": sum(r["size"] for r in rows),
         }
+
+    def _apply_names(self, root: str, rows: list[dict], resolver) -> None:
+        files = [r for r in rows if r["type"] == "file"]
+        if not files:
+            return
+        wanted = resolver([self.db_path(root, r["rel"]) for r in files])
+        for r in files:
+            r["name"] = final_name(r["name"], wanted.get(self.db_path(root, r["rel"])))
 
     def _file_row(self, root: str, e: Entry, is_orphan: bool) -> dict:
         return {

@@ -11,7 +11,7 @@ from gowa.client import GOWASendError, extract_msg_id
 
 from db.repositories import contact_repo, message_repo, config_repo
 from agent import group_mentions
-from server import media_policy
+from server import file_manager, media_policy
 from server.avatars import avatar_version, refresh_and_broadcast
 from server.helpers import _ok, _err, parse_split_reply
 from plugins.events import emit as emit_event, apply_filter, emit_with_filter
@@ -65,6 +65,7 @@ def register_routes(app, deps):
     settings = deps.settings
     statics_senditems_dir = deps.statics_senditems_dir
     statics_media_dir = deps.statics_media_dir
+    _download_lock = asyncio.Lock()  # serialises the Baixar button, see download_message_media
 
     async def _send_read_receipts(phone: str, msg_ids: list[str]):
         """Send read receipts to GOWA in background (best-effort)."""
@@ -604,29 +605,41 @@ def register_routes(app, deps):
             if existing is not None:
                 return _ok({"media_path": target["media_path"], "already": True})
 
-        try:
-            info = await asyncio.to_thread(gowa_client.download_media, msg_id, phone)
-        except GOWASendError as e:
-            if e.error_type == "expired":
-                return _err("Esse arquivo não está mais disponível no WhatsApp.", status=410)
-            if e.error_type == "network":
-                return _err("O WhatsApp não está acessível agora. Tente de novo em instantes.", status=502)
-            logger.warning("[DownloadMedia] %s msg %s: %s", phone, msg_id, e)
-            return _err("Não foi possível baixar o arquivo. Tente de novo mais tarde.", status=502)
+        # One at a time: GOWA creates <phone>/<date>/ before it downloads and
+        # writes the file seconds later, and settle_download prunes empty
+        # folders. Overlapping clicks could otherwise remove a folder that a
+        # sibling download is about to write into.
+        async with _download_lock:
+            try:
+                info = await asyncio.to_thread(gowa_client.download_media, msg_id, phone)
+            except GOWASendError as e:
+                if e.error_type == "expired":
+                    return _err("Esse arquivo não está mais disponível no WhatsApp.", status=410)
+                if e.error_type == "network":
+                    return _err("O WhatsApp não está acessível agora. Tente de novo em instantes.", status=502)
+                logger.warning("[DownloadMedia] %s msg %s: %s", phone, msg_id, e)
+                return _err("Não foi possível baixar o arquivo. Tente de novo mais tarde.", status=502)
 
-        # GOWA answers with a path relative to its own working directory (the
-        # project root). Accept it only if it lands inside statics/media.
-        resolved = media_policy.is_discardable_path(
-            info["file_path"], statics_media_dir, settings.data_dir)
-        if resolved is None:
-            logger.warning("[DownloadMedia] GOWA returned a path outside statics/media")
-            return _err("Não foi possível baixar o arquivo. Tente de novo mais tarde.", status=502)
+            # GOWA answers with a path relative to its own working directory (the
+            # project root). Accept it only if it lands inside statics/media.
+            resolved = media_policy.is_discardable_path(
+                info["file_path"], statics_media_dir, settings.data_dir)
+            if resolved is None:
+                logger.warning("[DownloadMedia] GOWA returned a path outside statics/media")
+                return _err("Não foi possível baixar o arquivo. Tente de novo mais tarde.", status=502)
+            # GOWA files an on-demand download under <phone>/<date>/ with no
+            # extension; bring it to the media root like every auto-downloaded file.
+            resolved = await asyncio.to_thread(
+                media_policy.settle_download, resolved, statics_media_dir)
         rel = "statics/media/" + resolved.relative_to(statics_media_dir.resolve()).as_posix()
 
         await asyncio.to_thread(message_repo.set_media, target["id"], rel, None)
+        # The Files screen caches its listing; drop it so the file shows up loose.
+        await asyncio.to_thread(deps.file_manager.invalidate)
         await ws_manager.broadcast("message_media_updated", {
             "phone": phone, "msg_id": msg_id, "media_state": None, "media_path": rel,
         })
+        await ws_manager.broadcast("storage_changed", {"files": 1, "bytes": 0, "messages": 1})
         logger.info("[DownloadMedia] restored a %s for %s", target.get("media_type"), phone)
         return _ok({"media_path": rel})
 
@@ -995,7 +1008,8 @@ def register_routes(app, deps):
         }
         contact = agent_handler._get_contact(phone)
         contact.add_message("assistant", caption, media_type="image", media_path=rel_path,
-                            status="operator", msg_id=msg_id)
+                            status="operator", msg_id=msg_id,
+                            media_name=file_manager.upload_name(image.filename) or None)
 
         await ws_manager.broadcast("new_message", {"phone": phone, "message": msg_data})
         await emit_with_filter("message.sent", {
@@ -1065,7 +1079,8 @@ def register_routes(app, deps):
         }
         contact = agent_handler._get_contact(phone)
         contact.add_message("assistant", "[Áudio]", media_type="audio", media_path=rel_path,
-                            status="operator", msg_id=msg_id)
+                            status="operator", msg_id=msg_id,
+                            media_name=file_manager.upload_name(audio.filename) or None)
 
         await ws_manager.broadcast("new_message", {"phone": phone, "message": msg_data})
         await emit_with_filter("message.sent", {
@@ -1142,7 +1157,8 @@ def register_routes(app, deps):
         }
         contact = agent_handler._get_contact(phone)
         contact.add_message("assistant", text_content, media_type="document",
-                            media_path=rel_path, status="operator", msg_id=msg_id)
+                            media_path=rel_path, status="operator", msg_id=msg_id,
+                            media_name=file_manager.clean_name(safe_name) or None)
 
         await ws_manager.broadcast("new_message", {"phone": phone, "message": msg_data})
         await emit_with_filter("message.sent", {

@@ -94,6 +94,10 @@ messages = Table(
     # NULL = normal. 'discarded' = file not kept (auto-download policy);
     # 'removed' = file deleted later by the file manager.
     Column("media_state", Text),
+    # Name the sender gave the file ("Teste.mp4"), for the file manager and for
+    # downloading it under that name. NULL = none known: WhatsApp only carries a
+    # name for documents, and rows from before this column are read from `content`.
+    Column("media_name", Text),
 )
 Index("idx_msg_contact_ts", messages.c.contact_id, messages.c.ts)
 Index("idx_msg_id", messages.c.msg_id)

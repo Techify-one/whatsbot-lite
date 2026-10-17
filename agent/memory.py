@@ -137,12 +137,13 @@ class ContactMemory:
                     media_type: str | None = None, media_path: str | None = None,
                     status: str | None = None, msg_id: str | None = None,
                     reply_to_msg_id: str | None = None,
-                    media_state: str | None = None):
+                    media_state: str | None = None,
+                    media_name: str | None = None):
         message_repo.add(
             self.id, role, content,
             media_type=media_type, media_path=media_path,
             status=status, msg_id=msg_id, reply_to_msg_id=reply_to_msg_id,
-            media_state=media_state,
+            media_state=media_state, media_name=media_name,
         )
         # Touch updated_at
         contact_repo.update(self.id)

@@ -286,6 +286,7 @@ def create_app(
             "style-src 'self' 'unsafe-inline'; "
             "img-src 'self' data: blob:; "
             "media-src 'self' data: blob:; "
+            "frame-src 'self' blob:; "
             "connect-src 'self' ws: wss:; "
             "frame-ancestors 'none'"
         )

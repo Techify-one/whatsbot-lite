@@ -12,7 +12,7 @@ from gowa.client import GOWASendError, extract_msg_id
 
 from db.repositories import contact_repo, message_repo
 from agent import group_mentions
-from server import media_policy
+from server import file_manager, media_policy
 from server.execution import astart_execution, aend_execution, atrack_step, prune_executions
 from server.helpers import _ok, parse_split_reply
 from plugins.events import emit as emit_event, apply_filter, emit_with_filter
@@ -34,6 +34,18 @@ def _coerce_path(raw):
     if isinstance(raw, dict):
         return (raw.get("path") or ""), dict(raw)
     return "", {}
+
+
+def _media_name(media_type: str | None, extras: dict | None) -> str | None:
+    """Name the sender gave the file, to keep in ``messages.media_name``.
+
+    Only documents carry one: WhatsApp sends no file name for photos, voice
+    notes or videos, and the ``filename`` GOWA stores for those is made up by
+    GOWA itself (``image_<time>.jpg``), so it must not be shown as the sender's.
+    """
+    if media_type != "document":
+        return None
+    return file_manager.clean_name((extras or {}).get("file_name")) or None
 
 
 def _extract_media(data: dict, *, is_from_me: bool, existing_text: str) -> dict:
@@ -971,6 +983,7 @@ def register_routes(app, deps):
                     media_path=_saved_media_path,
                     msg_id=item.get("msg_id"),
                     reply_to_msg_id=item.get("reply_to_msg_id"),
+                    media_name=_media_name(_saved_media_type, item.get("media_extras")),
                 )
                 await emit_with_filter("message.saved", {
                     "phone": phone, "text": _saved_text,
@@ -1635,6 +1648,7 @@ def register_routes(app, deps):
                 contact.add_message, "assistant", text,
                 media_type=media_type, media_path=media_path, msg_id=msg_id,
                 reply_to_msg_id=reply_to_msg_id,
+                media_name=_media_name(media_type, media_extras),
                 status="operator")
 
             # Broadcast to frontend
@@ -1897,7 +1911,8 @@ def register_routes(app, deps):
                 contact_obj.add_message,
                 "user", saved_text,
                 media_type=media_type, media_path=media_path,
-                msg_id=msg_id, reply_to_msg_id=reply_to_msg_id)
+                msg_id=msg_id, reply_to_msg_id=reply_to_msg_id,
+                media_name=_media_name(media_type, media_extras))
             await emit_with_filter("message.saved", {
                 "phone": phone, "text": saved_text, "msg_id": msg_id,
                 "media_type": media_type, "media_path": media_path,

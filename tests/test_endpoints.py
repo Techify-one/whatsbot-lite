@@ -1383,17 +1383,23 @@ check("API keeps media_type for the placeholder", _api_img.get("media_type") == 
 
 section("Media download button (download-media)")
 from gowa.client import GOWASendError
+_GOWA_DL_DIR = "_dl_test_phone/2026-10-16"
 def _fresh_download(rel_name: str) -> dict:
-    rel = _media_file(rel_name, 128)
-    return {"file_path": rel, "filename": rel_name, "file_size": 128}
+    """What GOWA's on-demand download really does: <phone>/<date>/<name>, no extension."""
+    d = _media_root / _GOWA_DL_DIR
+    d.mkdir(parents=True, exist_ok=True)
+    (d / rel_name).write_bytes(b"\xff\xd8\xff\xe0" + b"x" * 124)
+    return {"file_path": f"statics/media/{_GOWA_DL_DIR}/{rel_name}", "filename": rel_name, "file_size": 128}
 
-mock_gowa_client.download_media = MagicMock(return_value=_fresh_download("restored.jpg"))
+mock_gowa_client.download_media = MagicMock(return_value=_fresh_download("restored"))
 r = client.post(f"/api/contacts/{_ind}/messages/pol_i_img/download-media")
 check("download-media -> 200", r.status_code == 200, r.text[:200])
 _row = _msg_row(_ind, "pol_i_img")
 check("download-media restores the path and clears the state",
-      _row is not None and _row.get("media_path") == "statics/media/_policy_test/restored.jpg"
+      _row is not None and _row.get("media_path") == "statics/media/restored.jpg"
       and not _row.get("media_state"))
+check("the file sits loose in the media root, with the extension its content calls for",
+      (_media_root / "restored.jpg").is_file() and not (_media_root / "_dl_test_phone").exists())
 mock_gowa_client.download_media.reset_mock()
 r = client.post(f"/api/contacts/{_ind}/messages/pol_i_img/download-media")
 check("download-media on a message that already has its file does not call GOWA",
@@ -1419,7 +1425,7 @@ r = client.post(f"/api/contacts/{_grp}/messages/pol_g_vid/download-media")
 check("a path outside statics/media returned by GOWA is refused", r.status_code == 502)
 _row = _msg_row(_grp, "pol_g_vid")
 check("...and the message is left untouched", _row is not None and _row.get("media_state") == "discarded")
-mock_gowa_client.download_media = MagicMock(return_value=_fresh_download("restored_grp.mp4"))
+mock_gowa_client.download_media = MagicMock(return_value=_fresh_download("restored_grp"))
 r = client.post(f"/api/contacts/{_grp}/messages/pol_g_vid/download-media")
 check("group media can be downloaded too", r.status_code == 200)
 
@@ -1442,12 +1448,26 @@ _mine = [i for i in _items if i["rel"].startswith("_policy_test/")]
 check("lists the test files", len(_mine) >= 3)
 check("sorted heaviest first", [i["size"] for i in _items] == sorted([i["size"] for i in _items], reverse=True))
 check("rows carry opaque ids, never paths", all("/" not in i["id"] and "statics" not in i["id"] for i in _items))
-_restored = next((i for i in _mine if i["name"] == "restored.jpg"), None)
+_restored = next((i for i in _items if i["rel"] == "restored.jpg"), None)
+check("a file fetched by Baixar is listed loose in the root, not inside a folder",
+      _restored is not None and "/" not in _restored["rel"])
 check("a file linked to a message shows its origin",
       _restored is not None and _restored["orphan"] is False and _restored["origin"]["phone"] == _ind)
 _orph = next((i for i in _mine if i["name"] == "g_aud.ogg"), None)
 check("a kept group file is linked to its group",
       _orph is not None and _orph["origin"]["is_group"] is True)
+# The "Conversa" column links to the exact message: contacts.id + messages.id.
+_grp_row = _msg_row(_grp, "pol_g_aud")
+check("origin carries the ids the conversation view opens by",
+      _orph is not None and _orph["origin"]["contact_id"] == contact_repo.get_by_phone(_grp)["id"]
+      and _orph["origin"]["message_id"] == _grp_row["_id"])
+_ind_row = _msg_row(_ind, "pol_i_img")
+check("origin of a restored file points at the message that brought it",
+      _restored is not None and _restored["origin"]["message_id"] == _ind_row["_id"]
+      and _restored["origin"]["contact_id"] == contact_repo.get_by_phone(_ind)["id"])
+_page = client.get(f"/api/contacts/{_ind}/messages?around={_ind_row['_id']}&limit=20").json()["data"]
+check("the linked message id opens a page that contains it",
+      any(m["_id"] == _ind_row["_id"] for m in _page["messages"]))
 r = client.get("/api/files?root=received&flat=true&orphans=true&limit=500")
 _orph_names = {i["name"] for i in r.json()["data"]["items"]}
 (_test_dir / "orphan_one.bin").write_bytes(b"o" * 10)
@@ -1474,7 +1494,7 @@ shutil.rmtree(_media_root / "120363000000000001", ignore_errors=True)
 client.get("/api/files/usage?refresh=true")
 
 r = client.get(f"/api/files/{_restored['id']}/preview")
-check("preview serves the file", r.status_code == 200 and r.content == b"x" * 128)
+check("preview serves the file", r.status_code == 200 and r.content == b"\xff\xd8\xff\xe0" + b"x" * 124)
 check("preview is inline for images", "inline" in r.headers.get("content-disposition", ""))
 check("preview sets nosniff", r.headers.get("x-content-type-options") == "nosniff")
 r = client.get(f"/api/files/{_restored['id']}/preview?download=true")
@@ -1485,12 +1505,327 @@ _evil = next(i for i in client.get("/api/files?root=received&flat=true&limit=500
 r = client.get(f"/api/files/{_evil['id']}/preview")
 check("html is never rendered inline", "attachment" in r.headers.get("content-disposition", "")
       and r.headers.get("content-type", "").startswith("application/octet-stream"))
+(_test_dir / "evil.svg").write_text("<svg xmlns='http://www.w3.org/2000/svg'><script>alert(1)</script></svg>")
+(_test_dir / "photo.jfif").write_bytes(b"\xff\xd8\xff\xe0" + b"j" * 40)
+(_test_dir / "doc.pdf").write_bytes(b"%PDF-1.4\n1 0 obj")
+(_test_dir / "no_extension").write_bytes(b"\xff\xd8\xff\xe0" + b"n" * 40)
+(_test_dir / "report.docx").write_bytes(b"PK\x03\x04docx")
+client.get("/api/files/usage?refresh=true")
+_by_name = {i["name"]: i for i in client.get("/api/files?root=received&flat=true&limit=500").json()["data"]["items"]}
+def _preview(name, suffix=""):
+    return client.get(f"/api/files/{_by_name[name]['id']}/preview{suffix}")
+r = _preview("evil.svg")
+check("svg is never rendered inline", "attachment" in r.headers.get("content-disposition", "")
+      and r.headers.get("content-type", "").startswith("application/octet-stream"))
+r = _preview("photo.jfif")
+check("jfif is served as an inline jpeg", "inline" in r.headers.get("content-disposition", "")
+      and r.headers.get("content-type") == "image/jpeg")
+check("jfif is listed as an image", _by_name["photo.jfif"]["kind"] == "image")
+r = _preview("doc.pdf")
+check("pdf is served inline", "inline" in r.headers.get("content-disposition", "")
+      and r.headers.get("content-type") == "application/pdf")
+r = _preview("no_extension")
+check("a jpeg without extension is shown by its content", "inline" in r.headers.get("content-disposition", "")
+      and r.headers.get("content-type") == "image/jpeg")
+r = _preview("report.docx")
+check("an office file stays a download", "attachment" in r.headers.get("content-disposition", "")
+      and r.headers.get("content-type", "").startswith("application/octet-stream"))
+check("download=true still forces attachment on a viewable file",
+      "attachment" in _preview("photo.jfif", "?download=true").headers.get("content-disposition", ""))
+check("every preview keeps nosniff", all(
+    _preview(n).headers.get("x-content-type-options") == "nosniff"
+    for n in ("evil.svg", "photo.jfif", "doc.pdf", "report.docx")))
 import base64 as _b64
 def _forge(root, rel):
     return _b64.urlsafe_b64encode(f"{root}:{rel}".encode()).decode().rstrip("=")
 check("preview of a forged traversal id -> 404",
       client.get(f"/api/files/{_forge('received', '../../storages/whatsbot.db')}/preview").status_code == 404)
 check("preview of garbage id -> 404", client.get("/api/files/!!!/preview").status_code == 404)
+
+section("File manager (sender file names)")
+from urllib.parse import unquote as _unquote
+
+def _disposition_name(resp) -> str:
+    """Filename a browser would save the response under."""
+    cd = resp.headers.get("content-disposition", "")
+    if "filename*=utf-8''" in cd:
+        return _unquote(cd.split("filename*=utf-8''", 1)[1])
+    return cd.split('filename="', 1)[1].rstrip('"') if 'filename="' in cd else ""
+
+def _listed(name_or_rel_prefix: str):
+    client.get("/api/files/usage?refresh=true")
+    items = client.get("/api/files?root=received&flat=true&limit=500").json()["data"]["items"]
+    return next((i for i in items if i["rel"].startswith(name_or_rel_prefix)), None)
+
+# 1) Customer sends "Teste.mp4": GOWA stores it under a uuid name; the webhook
+#    carries the real one in the document payload.
+settings["document_transcription_enabled"] = False
+client.put("/api/config", json={"media_autodownload": {"document": {"individual": True, "group": True},
+                                                          "video": {"individual": True, "group": True}}})
+_nm_doc = _media_file("1792000001-aaaa-uuid-doc.mp4")
+r = client.post("/api/webhook", json={"event": "message", "payload": {
+    "id": "nm_doc_1", "chat_id": "120363000000000001@g.us",
+    "from": "5511988880001:5@s.whatsapp.net", "from_name": "Membro", "subject": "Grupo Teste",
+    "is_from_me": False, "timestamp": str(int(time.time())),
+    "document": {"path": _nm_doc, "file_name": "Teste.mp4", "mimetype": "video/mp4", "caption": ""},
+}})
+check("document with a name -> 200", r.status_code == 200)
+_row = _msg_row(_grp, "nm_doc_1")
+check("the sender's file name is stored on the message", _row is not None and _row.get("media_path") == _nm_doc)
+_it = _listed("_policy_test/1792000001-aaaa-uuid-doc.mp4")
+check("the file manager shows the name the customer used", _it is not None and _it["name"] == "Teste.mp4",
+      str(_it and _it["name"]))
+check("...while the id and rel still point at the real file",
+      _it is not None and _it["rel"] == "_policy_test/1792000001-aaaa-uuid-doc.mp4")
+r = client.get(f"/api/files/{_it['id']}/preview?download=true")
+check("downloading it saves it under the same name", _disposition_name(r) == "Teste.mp4", r.headers.get("content-disposition", ""))
+r = client.get(f"/api/files/{_it['id']}/preview")
+check("opening it in the viewer also carries the name", _disposition_name(r) == "Teste.mp4")
+
+# 2) A name with accents, spaces and a hostile path part is kept readable and safe.
+_nm_hostile = _media_file("1792000002-bbbb-uuid-doc.pdf")
+client.post("/api/webhook", json={"event": "message", "payload": {
+    "id": "nm_doc_2", "chat_id": "120363000000000001@g.us",
+    "from": "5511988880001:5@s.whatsapp.net", "from_name": "Membro", "subject": "Grupo Teste",
+    "is_from_me": False, "timestamp": str(int(time.time())),
+    "document": {"path": _nm_hostile, "file_name": "..\\..\\Relatório final: 2026?.pdf", "mimetype": "application/pdf", "caption": ""},
+}})
+_it = _listed("_policy_test/1792000002-bbbb-uuid-doc.pdf")
+check("a hostile or odd name is cleaned, accents kept", _it is not None and _it["name"] == "Relatório final 2026.pdf",
+      str(_it and _it["name"]))
+r = client.get(f"/api/files/{_it['id']}/preview?download=true")
+check("the download name has no path and no forbidden characters",
+      _disposition_name(r) == "Relatório final 2026.pdf", r.headers.get("content-disposition", ""))
+
+# 3) Photos, videos and voice notes carry no name from WhatsApp: GOWA's own
+#    invented name (image_<time>.jpg) must not be passed off as the customer's.
+_nm_img = _media_file("1792000003-cccc-uuid-img.jpg")
+client.post("/api/webhook", json={"event": "message", "payload": {
+    "id": "nm_img_1", "chat_id": "120363000000000001@g.us",
+    "from": "5511988880001:5@s.whatsapp.net", "from_name": "Membro", "subject": "Grupo Teste",
+    "is_from_me": False, "timestamp": str(int(time.time())),
+    "image": {"path": _nm_img, "caption": "", "file_name": "image_20261016_114440.jpg"},
+}})
+client.put("/api/config", json={"media_autodownload": {"image": {"individual": True, "group": True}}})
+_nm_img2 = _media_file("1792000004-dddd-uuid-img.jpg")
+client.post("/api/webhook", json={"event": "message", "payload": {
+    "id": "nm_img_2", "chat_id": "120363000000000001@g.us",
+    "from": "5511988880001:5@s.whatsapp.net", "from_name": "Membro", "subject": "Grupo Teste",
+    "is_from_me": False, "timestamp": str(int(time.time())),
+    "image": {"path": _nm_img2, "caption": "", "file_name": "image_20261016_114440.jpg"},
+}})
+_it = _listed("_policy_test/1792000004-dddd-uuid-img.jpg")
+check("a photo keeps its on-disk name (WhatsApp sends none)",
+      _it is not None and _it["name"] == "1792000004-dddd-uuid-img.jpg", str(_it and _it["name"]))
+check("a photo is not named after GOWA's made-up filename", _it is not None and "image_2026" not in _it["name"])
+
+# 4) Documents saved BEFORE the column existed keep their name only in the text.
+_nm_old = _media_file("1792000005-eeee-uuid-old.pdf")
+_old_c = contact_repo.get_by_phone(_ind)
+message_repo.add(_old_c["id"], "user", "[Documento recebido: Proposta antiga.pdf]\nsegue", media_type="document",
+                 media_path=_nm_old, msg_id="nm_old_1")
+_it = _listed("_policy_test/1792000005-eeee-uuid-old.pdf")
+check("an old document is named from its message text", _it is not None and _it["name"] == "Proposta antiga.pdf",
+      str(_it and _it["name"]))
+_nm_gen = _media_file("1792000006-ffff-uuid-gen.pdf")
+message_repo.add(_old_c["id"], "user", "[Documento recebido: documento]", media_type="document",
+                 media_path=_nm_gen, msg_id="nm_old_2")
+_it = _listed("_policy_test/1792000006-ffff-uuid-gen.pdf")
+check("the generic 'documento' placeholder is never shown as a name",
+      _it is not None and _it["name"] == "1792000006-ffff-uuid-gen.pdf", str(_it and _it["name"]))
+
+# 4b) A document the operator sent from their own phone (echo) keeps its name too.
+_nm_echo = _media_file("1792000007-gggg-uuid-echo.pdf")
+r = client.post("/api/webhook", json={"event": "message", "payload": {
+    "id": "nm_echo_1", "chat_id": f"{_ind}@s.whatsapp.net", "from": "5511900000000@s.whatsapp.net",
+    "is_from_me": True, "timestamp": str(int(time.time())),
+    "document": {"path": _nm_echo, "file_name": "Tabela de preços.xlsx", "caption": ""},
+}})
+check("echo of a document sent from the phone -> 200", r.status_code == 200)
+_it = _listed("_policy_test/1792000007-gggg-uuid-echo.xlsx") or _listed("_policy_test/1792000007-gggg-uuid-echo.pdf")
+check("a document sent from the phone is listed under its own name",
+      _it is not None and _it["name"] == "Tabela de preços.xlsx", str(_it and _it["name"]))
+
+# 5) What the operator sends keeps the name picked in the file dialog.
+_png = b"\x89PNG\r\n\x1a\n" + b"\x00" * 60
+r = client.post("/api/contacts/5511999990001/send-document",
+                files={"document": ("Orçamento 2026.pdf", io.BytesIO(b"%PDF-1.4\n" + b"\x00" * 40), "application/pdf")},
+                data={"caption": ""})
+check("operator sends a document -> 200", r.status_code == 200)
+client.get("/api/files/usage?refresh=true")
+_sent = [i for i in client.get("/api/files?root=sent&flat=true&limit=500").json()["data"]["items"]
+         if i["name"] == "Orçamento 2026.pdf"]
+check("a sent document is listed under the name the operator chose", len(_sent) == 1)
+r = client.get(f"/api/files/{_sent[0]['id']}/preview?download=true")
+check("...and downloads under it", _disposition_name(r) == "Orçamento 2026.pdf", r.headers.get("content-disposition", ""))
+r = client.post("/api/contacts/5511999990001/send-image", files={"image": ("foto da obra.png", io.BytesIO(_png), "image/png")})
+client.get("/api/files/usage?refresh=true")
+_sent_img = [i for i in client.get("/api/files?root=sent&flat=true&limit=500").json()["data"]["items"]
+             if i["name"] == "foto da obra.png"]
+check("a sent image keeps the file's own name", len(_sent_img) == 1)
+r = client.post("/api/contacts/5511999990001/send-audio", files={"audio": ("voice.ogg", io.BytesIO(b"OggS" + b"\x00" * 60), "audio/ogg")})
+client.get("/api/files/usage?refresh=true")
+_voice = [i for i in client.get("/api/files?root=sent&flat=true&limit=500").json()["data"]["items"]
+          if i["name"] == "voice.ogg"]
+check("a mic recording is not given a fake name", len(_voice) == 0)
+
+# 6) Sorting by name orders by what the user sees.
+_by_name = client.get("/api/files?root=received&flat=true&sort=name&order=asc&limit=500").json()["data"]["items"]
+_mine_sorted = [i["name"] for i in _by_name if i["rel"].startswith("_policy_test/")]
+check("sort by name orders by the shown names",
+      _mine_sorted == sorted(_mine_sorted, key=str.lower), str(_mine_sorted))
+
+# 7) Deleting a file by its displayed (renamed) row still works through the id.
+_it = _listed("_policy_test/1792000001-aaaa-uuid-doc.mp4")
+r = client.post("/api/files/delete", json={"ids": [_it["id"]]})
+check("a renamed file is deleted through its id", r.status_code == 200 and r.json()["data"]["files"] == 1)
+check("...and the right file on disk is gone", not (PROJECT_ROOT / _nm_doc).exists())
+client.put("/api/config", json={"media_autodownload": {}})
+
+section("File manager (filters)")
+# Own contacts, so the sections above cannot change what is expected here.
+_fc_ind = contact_repo.get_or_create("5511966660001")
+contact_repo.update(_fc_ind["id"], name="Marcos Pereira")
+_fc_other = contact_repo.get_or_create("5511966660002")
+contact_repo.update(_fc_other["id"], name="Joana Silva")
+_fc_grp = contact_repo.get_or_create("120363000000000777@g.us")
+contact_repo.update(_fc_grp["id"], is_group=1, group_name="Obra Rua das Flores")
+
+def _fc_file(name: str, age_days: float = 0.0, size: int = 32) -> str:
+    path = _test_dir / name
+    path.write_bytes(b"x" * size)
+    if age_days:
+        _t = time.time() - age_days * 86400
+        os.utime(path, (_t, _t))
+    return f"statics/media/_policy_test/{name}"
+
+_fc_a = _fc_file("fc_audio.ogg")
+_fc_b = _fc_file("fc_photo.jpg", age_days=20)
+_fc_c = _fc_file("fc_doc.pdf", age_days=3)
+_fc_d = _fc_file("fc_grp_img.jpg", age_days=1)
+_fc_e = _fc_file("fc_plain_audio.ogg")
+message_repo.add(_fc_ind["id"], "user", "[Transcrição do áudio]: preciso do boleto de outubro",
+                 media_type="audio", media_path=_fc_a, msg_id="fc_1")
+message_repo.add(_fc_ind["id"], "user", "[Descrição da imagem]: um recibo de pagamento\nfoto da obra",
+                 media_type="image", media_path=_fc_b, msg_id="fc_2")
+message_repo.add(_fc_other["id"], "user", "[Documento recebido: Contrato Social.pdf]",
+                 media_type="document", media_path=_fc_c, media_name="Contrato Social.pdf", msg_id="fc_3")
+message_repo.add(_fc_grp["id"], "user", "[Fulano]: segue a planta da construção", media_type="image", media_path=_fc_d, msg_id="fc_4")
+message_repo.add(_fc_other["id"], "user", "[Áudio recebido]", media_type="audio", media_path=_fc_e, msg_id="fc_5")
+client.get("/api/files/usage?refresh=true")
+
+def _fc_list(**params) -> list[dict]:
+    qs = "&".join(f"{k}={v}" for k, v in {"root": "received", "flat": "true", "limit": 500, **params}.items())
+    r = client.get(f"/api/files?{qs}")
+    assert r.status_code == 200, r.text[:200]
+    return [i for i in r.json()["data"]["items"] if i["rel"].startswith("_policy_test/fc_")]
+
+def _fc_names(**params) -> set[str]:
+    return {i["rel"].split("/")[-1] for i in _fc_list(**params)}
+
+check("without filters every test file is listed", len(_fc_list()) == 5)
+
+# search
+check("search finds a document by the name the sender gave", _fc_names(q="contrato") == {"fc_doc.pdf"})
+check("search ignores case", _fc_names(q="CONTRATO social") == {"fc_doc.pdf"})
+check("search ignores accents, typed with or without them",
+      _fc_names(q="construcao") == {"fc_grp_img.jpg"} and _fc_names(q="CONSTRUÇÃO") == {"fc_grp_img.jpg"})
+_hit = _fc_list(q="boleto")
+check("search finds an audio by its transcription", {i["rel"].split("/")[-1] for i in _hit} == {"fc_audio.ogg"})
+check("a text hit says it came from the message and shows the excerpt",
+      _hit and _hit[0].get("match") == "text" and "boleto" in _hit[0].get("snippet", ""))
+check("a name hit says it came from the name", _fc_list(q="contrato")[0].get("match") == "name")
+check("search finds a photo by its description", _fc_names(q="recibo") == {"fc_photo.jpg"})
+check("search finds a photo by the caption under the description", _fc_names(q="foto da obra") == {"fc_photo.jpg"})
+check("search ignores the placeholders the app writes",
+      _fc_names(q="recebido") == set() and _fc_names(q="Transcrição") == set() and _fc_names(q="Descrição") == set())
+check("search can match the on-disk name of a file with no name of its own", _fc_names(q="fc_plain") == {"fc_plain_audio.ogg"})
+check("an unmatched search lists nothing", _fc_names(q="zzzxxyy") == set())
+check("a blank search is no filter", len(_fc_list(q="%20%20")) == 5)
+
+# conversation
+check("conversation by contact name", _fc_names(conversation="marcos") == {"fc_audio.ogg", "fc_photo.jpg"})
+check("conversation name ignores accents and case", _fc_names(conversation="JOANA") == {"fc_doc.pdf", "fc_plain_audio.ogg"})
+check("conversation by group name", _fc_names(conversation="flores") == {"fc_grp_img.jpg"})
+check("conversation by phone number", _fc_names(conversation="5511966660001") == {"fc_audio.ogg", "fc_photo.jpg"})
+check("conversation by a number typed with formatting",
+      _fc_names(conversation="(11)%2096666-0001") == {"fc_audio.ogg", "fc_photo.jpg"})
+check("conversation by the number without the country code",
+      _fc_names(conversation="11966660002") == {"fc_doc.pdf", "fc_plain_audio.ogg"})
+check("conversation that nobody has lists nothing", _fc_names(conversation="ninguem%20assim") == set())
+check("a file with no message belongs to no conversation", "orphan_one.bin" not in {i["name"] for i in _fc_list(conversation="marcos")} )
+
+# private / group
+check("only individual chats", _fc_names(chat_type="individual") == {"fc_audio.ogg", "fc_photo.jpg", "fc_doc.pdf", "fc_plain_audio.ogg"})
+check("only groups", _fc_names(chat_type="group") == {"fc_grp_img.jpg"})
+check("an unknown chat_type is ignored", len(_fc_list(chat_type="qualquer")) == 5)
+check("chat_type and conversation combine", _fc_names(chat_type="group", conversation="marcos") == set())
+
+# period (the browser sends midnights; the server takes epoch seconds)
+_now = time.time()
+check("date_from keeps the recent ones", _fc_names(date_from=_now - 2 * 86400) == {"fc_audio.ogg", "fc_grp_img.jpg", "fc_plain_audio.ogg"})
+check("date_to keeps the old ones", _fc_names(date_to=_now - 2 * 86400) == {"fc_photo.jpg", "fc_doc.pdf"})
+check("a range", _fc_names(date_from=_now - 5 * 86400, date_to=_now - 2 * 86400) == {"fc_doc.pdf"})
+
+# filters stack
+check("search + period + chat type stack",
+      _fc_names(q="obra", date_to=_now - 10 * 86400, chat_type="individual") == {"fc_photo.jpg"})
+check("search + file kind stack", _fc_names(q="marcos", kind="audio") == set() and _fc_names(conversation="marcos", kind="audio") == {"fc_audio.ogg"})
+check("the total reflects the filter",
+      client.get("/api/files?root=received&flat=true&conversation=marcos").json()["data"]["total_bytes"] == 64)
+check("orphans still works next to a filter", "fc_audio.ogg" not in _fc_names(orphans="true", conversation="marcos"))
+check("paging works with a filter",
+      len(client.get("/api/files?root=received&flat=true&conversation=joana&limit=1").json()["data"]["items"]) == 1
+      and client.get("/api/files?root=received&flat=true&conversation=joana&limit=1").json()["data"]["total"] == 2)
+check("filters never widen access (bad path still 400)",
+      client.get("/api/files?root=received&path=../../storages&q=x").status_code == 400)
+check("a search with LIKE wildcards is a plain search", _fc_names(q="%25") == set() and _fc_names(conversation="%25") == set())
+
+# picking a conversation from the suggestions (two clients can share a name)
+_fc_twin = contact_repo.get_or_create("5511966660003")
+contact_repo.update(_fc_twin["id"], name="Marcos Pereira")
+_fc_f = _fc_file("fc_twin_doc.pdf", age_days=2)
+message_repo.add(_fc_twin["id"], "user", "[Documento recebido: Planta.pdf]",
+                 media_type="document", media_path=_fc_f, media_name="Planta.pdf", msg_id="fc_6")
+client.get("/api/files/usage?refresh=true")
+
+def _fc_suggest(q: str, **params) -> list[dict]:
+    qs = "&".join(f"{k}={v}" for k, v in {"q": q, **params}.items())
+    r = client.get(f"/api/files/conversations?{qs}")
+    assert r.status_code == 200, r.text[:200]
+    return r.json()["data"]
+
+_sug = _fc_suggest("marcos")
+check("suggestions list both clients that share a name",
+      {s["phone"] for s in _sug} == {"5511966660001", "5511966660003"}, str(_sug))
+check("a suggestion carries what tells them apart and what draws the row",
+      all({"id", "phone", "name", "is_group", "avatar_v"} <= set(s) for s in _sug) and all(s["name"] == "Marcos Pereira" for s in _sug))
+check("suggestions find a person by the number typed with formatting",
+      [s["phone"] for s in _fc_suggest("(11)%2096666-0003")] == ["5511966660003"])
+check("suggestions find a group by name and flag it", [(s["name"], s["is_group"]) for s in _fc_suggest("FLORES")] == [("Obra Rua das Flores", True)])
+check("suggestions ignore accents and case", {s["phone"] for s in _fc_suggest("JOANA")} == {"5511966660002"})
+check("a blank or unmatched text suggests nothing", _fc_suggest("%20%20") == [] and _fc_suggest("ninguem%20assim") == [])
+check("the suggestion list honors the limit", len(_fc_suggest("marcos", limit=1)) == 1)
+check("suggestions never create a contact", contact_repo.get_by_phone("5511966660099") is None and _fc_suggest("5511966660099") == [])
+
+_by_id = {s["phone"]: s["id"] for s in _sug}
+check("picking one client lists only that client's files",
+      _fc_names(contact_id=_by_id["5511966660003"]) == {"fc_twin_doc.pdf"}
+      and _fc_names(contact_id=_by_id["5511966660001"]) == {"fc_audio.ogg", "fc_photo.jpg"})
+check("typing the name instead still lists both clients",
+      _fc_names(conversation="marcos") == {"fc_audio.ogg", "fc_photo.jpg", "fc_twin_doc.pdf"})
+check("a picked conversation wins over typed text",
+      _fc_names(contact_id=_by_id["5511966660003"], conversation="joana") == {"fc_twin_doc.pdf"})
+check("a picked conversation stacks with the other filters",
+      _fc_names(contact_id=_by_id["5511966660001"], kind="audio") == {"fc_audio.ogg"}
+      and _fc_names(contact_id=_by_id["5511966660001"], chat_type="group") == set())
+check("an id nobody has lists nothing", _fc_names(contact_id=987654) == set())
+check("a non-positive contact_id is no filter", len(_fc_list(contact_id=0)) == 6)
+check("a picked conversation keeps the list free of orphans", "orphan_one.bin" not in {i["name"] for i in _fc_list(contact_id=_by_id["5511966660001"])})
+
+for _f in (_fc_a, _fc_b, _fc_c, _fc_d, _fc_e, _fc_f):
+    (PROJECT_ROOT / _f).unlink(missing_ok=True)
+client.get("/api/files/usage?refresh=true")
 
 section("File manager (delete)")
 check("delete without ids -> 400", client.post("/api/files/delete", json={"ids": []}).status_code == 400)
@@ -1503,7 +1838,7 @@ check("the database survived", (PROJECT_ROOT / "storages" / "whatsbot.db").exist
 
 r = client.post("/api/files/delete", json={"ids": [_restored["id"]]})
 check("delete a linked file", r.status_code == 200 and r.json()["data"]["files"] == 1 and r.json()["data"]["messages"] == 1, r.text[:200])
-check("the file is gone", not (PROJECT_ROOT / "statics/media/_policy_test/restored.jpg").exists())
+check("the file is gone", not (PROJECT_ROOT / "statics/media/restored.jpg").exists())
 _row = _msg_row(_ind, "pol_i_img")
 check("the message becomes removed", _row is not None and _row.get("media_state") == "removed" and not _row.get("media_path"))
 r = client.post(f"/api/contacts/{_ind}/messages/pol_i_img/download-media")
@@ -1521,6 +1856,10 @@ check("messages of a deleted folder are flagged", _row is not None and _row.get(
 for _k, _v in _saved_cfg.items():
     settings[_k] = _v
 shutil.rmtree(_test_dir, ignore_errors=True)
+# Baixar now settles files loose in the media root (real project folder): sweep them.
+shutil.rmtree(_media_root / "_dl_test_phone", ignore_errors=True)
+for _leftover in ("restored.jpg", "restored_grp.jpg"):
+    (_media_root / _leftover).unlink(missing_ok=True)
 
 # ═══════════════════════════════════════════════════════════════════
 #  Summary

@@ -222,6 +222,13 @@ export async function listFiles(params = {}) {
   return request('GET', `/api/files?${qs.toString()}`);
 }
 
+// Contacts/groups a typed name or number points at (photo + number), for the
+// "Conversa" filter of the Arquivos screen.
+export async function getFileConversations(q, limit = 8) {
+  const qs = new URLSearchParams({ q, limit: String(limit) });
+  return request('GET', `/api/files/conversations?${qs.toString()}`);
+}
+
 export async function deleteFiles(ids) {
   return request('POST', '/api/files/delete', { ids });
 }

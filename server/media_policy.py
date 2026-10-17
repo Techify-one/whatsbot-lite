@@ -9,7 +9,11 @@ from __future__ import annotations
 
 import copy
 import logging
+import os
+import uuid
 from pathlib import Path
+
+from server import file_manager
 
 logger = logging.getLogger(__name__)
 
@@ -91,3 +95,55 @@ def is_discardable_path(path: str | None, statics_media_dir: Path, data_dir: Pat
         return resolved if resolved.is_file() else None
     except (OSError, ValueError):
         return None
+
+
+def settle_download(path: Path, statics_media_dir: Path) -> Path:
+    """Put a file fetched by the **Baixar** button where the others live.
+
+    GOWA's auto-download writes straight into ``statics/media/``, but its
+    on-demand download files the result under ``<phone>/<date>/`` and, because
+    it does not know the mimetype, without an extension. The Files screen would
+    show that as a folder holding a "document". This moves the file to the media
+    root, adds the extension the content calls for, and prunes the folders left
+    empty. Returns the final absolute path; on any filesystem error the file is
+    left where it was and that path is returned, so the message still points at
+    a file that exists.
+
+    ``path`` must already have been validated by :func:`is_discardable_path`.
+    """
+    root = statics_media_dir.resolve()
+    name = path.name
+    if not path.suffix:
+        name += file_manager.extension_for(file_manager.preview_mime(path))
+    target = root / name
+    try:
+        if path != target:
+            if target.exists():
+                # Names carry a uuid, so this is not expected; never overwrite.
+                target = root / f"{uuid.uuid4()}{target.suffix}"
+            os.replace(path, target)
+    except OSError as e:
+        logger.warning("Could not move a downloaded file to the media root: %s", e)
+        return path
+    _prune_empty_dirs(path.parent, root)
+    return target
+
+
+def _prune_empty_dirs(directory: Path, root: Path) -> None:
+    """Remove the (now empty) folder tree a file was moved out of.
+
+    Starts at the top-level folder under ``root`` that contains ``directory``
+    and only ever calls ``rmdir``, which refuses anything that still has content.
+    The root itself is never touched.
+    """
+    try:
+        top = root / directory.relative_to(root).parts[0]
+    except (ValueError, IndexError):
+        return  # already at the root, or outside it
+    if top.is_symlink() or not top.is_dir():
+        return
+    for current, _dirs, _files in os.walk(top, topdown=False, followlinks=False):
+        try:
+            os.rmdir(current)
+        except OSError:
+            pass

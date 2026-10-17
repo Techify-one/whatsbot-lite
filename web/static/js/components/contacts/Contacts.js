@@ -30,7 +30,7 @@ function sameMessage(a, b) {
 
 // ── Main Component ───────────────────────────────────────────────
 
-export function Contacts({ newMessage, chatPresence, contactInfoUpdated, tagsChanged, contactTagsUpdated, contactAiToggled, messagesRead, messageStatus, messageAction, messageReaction, mediaUpdated, avatarUpdated, groupParticipantsChanged, initialContactId, wsConnected, config, onConfigSave, onUnreadChange }) {
+export function Contacts({ newMessage, chatPresence, contactInfoUpdated, tagsChanged, contactTagsUpdated, contactAiToggled, messagesRead, messageStatus, messageAction, messageReaction, mediaUpdated, avatarUpdated, groupParticipantsChanged, initialContactId, initialMessageId, wsConnected, config, onConfigSave, onUnreadChange }) {
   const [contacts, setContacts] = useState([]);
   const [loading, setLoading] = useState(true);
   const [search, setSearch] = useState('');
@@ -64,6 +64,7 @@ export function Contacts({ newMessage, chatPresence, contactInfoUpdated, tagsCha
   const typingTimers = useRef({});
   const contactsRef = useRef([]);
   const lastResolvedId = useRef(null);
+  const triedArchivedRef = useRef(false);
   const pageVisibleRef = useRef(!document.hidden);
 
   // Keep refs in sync — avoids stale closures
@@ -433,11 +434,21 @@ export function Contacts({ newMessage, chatPresence, contactInfoUpdated, tagsCha
     }
     // Already resolved this exact ID — skip (prevents re-selecting on contacts list refresh)
     if (initialContactId === lastResolvedId.current) return;
-    if (contacts.length === 0 || loading) return;
+    if (loading) return;
     const c = contacts.find(c => c.id === initialContactId);
     if (c) {
+      // Set together with `selected`: the load effect opens the page around this message.
+      if (initialMessageId != null) setScrollToMsg(initialMessageId);
       setSelected(c.phone);
       lastResolvedId.current = initialContactId;
+    } else if (triedArchivedRef.current !== initialContactId) {
+      // Not in this list: a link to an archived conversation (from Arquivos or a
+      // bookmark) has to look in the other list once before giving up.
+      triedArchivedRef.current = initialContactId;
+      setShowArchived(!showArchived);
+    } else if (showArchived) {
+      // Not in the archived list either (deleted): go back to the inbox.
+      setShowArchived(false);
     }
   }, [initialContactId, contacts, loading]);
 

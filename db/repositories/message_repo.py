@@ -5,7 +5,7 @@ from __future__ import annotations
 import json
 import time
 
-from sqlalchemy import and_, delete as sa_delete, insert as sa_insert, or_, select, update as sa_update
+from sqlalchemy import and_, delete as sa_delete, func, insert as sa_insert, or_, select, update as sa_update
 
 from db.engine import get_engine
 from db.tables import messages
@@ -16,11 +16,14 @@ def add(contact_id: int, role: str, content: str, *,
         status: str | None = None, msg_id: str | None = None,
         reply_to_msg_id: str | None = None,
         media_state: str | None = None,
+        media_name: str | None = None,
         ts: float | None = None) -> dict:
     """Insert a message and return it as a dict.
 
     ``media_state`` is ``"discarded"`` when the file was deliberately not kept
     (auto-download policy); the row then has ``media_type`` but no ``media_path``.
+    ``media_name`` is the name the sender gave the file ("Teste.mp4"), already
+    cleaned by ``file_manager.clean_name``; ``None`` when none is known.
     """
     ts = ts or time.time()
     with get_engine().begin() as conn:
@@ -35,6 +38,7 @@ def add(contact_id: int, role: str, content: str, *,
             msg_id=msg_id,
             reply_to_msg_id=reply_to_msg_id,
             media_state=media_state,
+            media_name=media_name,
         ))
         new_id = result.inserted_primary_key[0]
     return {
@@ -502,8 +506,11 @@ def mark_media_state(paths: list[str], state: str) -> int:
 def paths_with_messages(paths: list[str]) -> dict[str, dict]:
     """Map each known ``media_path`` in ``paths`` to its message and contact.
 
-    Used by the file manager to show where a file came from. Paths without a
-    message are simply absent (orphans).
+    Used by the file manager to show where a file came from and to link to the
+    exact message: ``contact_id``/``message_id`` are the ``contacts.id`` and
+    ``messages.id`` the conversation view opens by. Paths without a message are
+    simply absent (orphans). When more than one message points at a file, the
+    oldest one wins (the one that actually brought the media in).
     """
     from db.tables import contacts  # local: keeps this module's import graph flat
 
@@ -517,15 +524,71 @@ def paths_with_messages(paths: list[str]) -> dict[str, dict]:
             rows = conn.execute(
                 select(
                     messages.c.media_path, messages.c.media_type, messages.c.ts,
-                    messages.c.msg_id, contacts.c.phone, contacts.c.name,
+                    messages.c.msg_id, messages.c.id.label("message_id"),
+                    contacts.c.id.label("contact_id"), contacts.c.phone, contacts.c.name,
                     contacts.c.is_group, contacts.c.group_name,
                 )
                 .select_from(messages.join(contacts, contacts.c.id == messages.c.contact_id))
                 .where(messages.c.media_path.in_(chunk))
+                .order_by(messages.c.id)
             ).mappings().all()
             for r in rows:
                 found.setdefault(r["media_path"], dict(r))
     return found
+
+def media_name_rows(paths: list[str]) -> list[dict]:
+    """Where the name a sender gave each file in ``paths`` can be read from.
+
+    One row per message that points at a path and could carry a name, oldest
+    first: ``media_name`` (set since the column exists) and, for documents only,
+    the head of ``content`` (``[Documento recebido: nome.ext]``, how the name was
+    kept before). The caller picks the first usable one per path. ``content`` is
+    cut short on purpose: this runs over whole pages of files.
+    """
+    paths = [p for p in dict.fromkeys(paths) if p]
+    rows: list[dict] = []
+    if not paths:
+        return rows
+    with get_engine().connect() as conn:
+        for i in range(0, len(paths), 500):
+            chunk = paths[i:i + 500]
+            found = conn.execute(
+                select(
+                    messages.c.media_path, messages.c.media_name, messages.c.media_type,
+                    func.substr(messages.c.content, 1, 400).label("content_head"),
+                )
+                .where(messages.c.media_path.in_(chunk))
+                .where(or_(messages.c.media_name.is_not(None), messages.c.media_type == "document"))
+                .order_by(messages.c.id)
+            ).mappings().all()
+            rows.extend(dict(r) for r in found)
+    return rows
+
+def media_message_rows(content_chars: int = 400) -> list[dict]:
+    """Every message that points at a file under ``statics/``, oldest first.
+
+    Feeds the file manager's database-backed filters (conversation, private or
+    group, text search) in ONE query: those filters must look at every file, and
+    a lookup per page of 500 paths would cost dozens of queries on a big folder.
+    ``content`` is cut to ``content_chars`` (captions, transcriptions and
+    descriptions can be long); pass a small number when the text is not needed.
+    """
+    from db.tables import contacts  # local: keeps this module's import graph flat
+
+    with get_engine().connect() as conn:
+        rows = conn.execute(
+            select(
+                messages.c.media_path, messages.c.media_name, messages.c.media_type,
+                messages.c.id.label("message_id"), messages.c.ts,
+                func.substr(messages.c.content, 1, content_chars).label("content"),
+                contacts.c.id.label("contact_id"), contacts.c.phone, contacts.c.name,
+                contacts.c.is_group, contacts.c.group_name,
+            )
+            .select_from(messages.join(contacts, contacts.c.id == messages.c.contact_id))
+            .where(messages.c.media_path.like("statics/%"))
+            .order_by(messages.c.id)
+        ).mappings().all()
+    return [dict(r) for r in rows]
 
 def get_media_target(contact_id: int, msg_id: str) -> dict | None:
     """The message row (id, media_type, media_state) a Baixar click refers to."""

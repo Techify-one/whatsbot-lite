@@ -28,6 +28,7 @@ gowa/client.py       → HTTP client para REST API do GOWA (localhost:3000)
 agent/handler.py     → orquestra o processamento de mensagens (system prompt, filters/events, usage, save); delega o loop de LLM ao motor AGNO
 agent/agno_engine.py → motor AGNO: monta OpenAILike + Agent único, envolve cada tool em agno Function (filters/events preservados), extrai reply/usage
 agent/memory.py      → ContactMemory e TagRegistry (leitura/escrita no SQLite via repos)
+db/textmatch.py     → fold()/match_snippet(): comparação sem acento nem maiúscula, compartilhada pela busca de conversas e de arquivos
 agent/group_mentions.py → resolução de @menções em grupos (número ↔ nome, lista de membros, @todos)
 agent/tools/         → tools core do LLM (uma tool por arquivo, agregadas em CORE_TOOLS)
 config/settings.py   → load/save config + constantes do provider/Techify (LLM_API_BASE_URL, TECHIFY_*)
@@ -158,7 +159,7 @@ Para Docker: setar `DATABASE_URL` no `.env` antes de subir o container — o arq
 | `config` | Configurações do app (key-value, valores JSON-encoded). Configs de plugin usam prefixo `plugin.<id>.` |
 | `contacts` | Contatos/grupos (phone, name, email, profissão, empresa, flags). Inclui `is_pinned` (fixar conversa no topo) e `has_unread_mention` (@menção não lida em grupo) |
 | `observations` | Notas/observações por contato (texto livre) |
-| `messages` | Histórico completo de mensagens (role, content, ts, media). Inclui `revoked` (apagada pra todos), `reactions` (JSON `{emoji: [reactor,...]}`), `reply_to_msg_id` (msg_id GOWA da mensagem citada) e `media_state` (`NULL` normal, `discarded` = arquivo não guardado pela política de download, `removed` = apagado depois na tela Arquivos; nos dois casos `media_path` fica `NULL` e `media_type` é mantido). `media_path` é indexado |
+| `messages` | Histórico completo de mensagens (role, content, ts, media). Inclui `revoked` (apagada pra todos), `reactions` (JSON `{emoji: [reactor,...]}`), `reply_to_msg_id` (msg_id GOWA da mensagem citada) `media_state` (`NULL` normal, `discarded` = arquivo não guardado pela política de download, `removed` = apagado depois na tela Arquivos; nos dois casos `media_path` fica `NULL` e `media_type` é mantido) e `media_name` (nome que o remetente deu ao arquivo, já passado por `file_manager.clean_name`; `NULL` = desconhecido, ver [Tela Arquivos](#download-automático-de-mídia-e-tela-arquivos)). `media_path` é indexado |
 | `usage` | Registros de uso da API (tokens, custo, modelo) |
 | `tags` | Tags globais (name, color) |
 | `contact_tags` | Relação N:N contato ↔ tag |
@@ -517,7 +518,13 @@ tem padrão enxuto para todos, instalação local inclusa: só áudio fica. A l�
 - **Mídia do próprio operador** (`is_from_me`, envios pelo painel) nunca passa pela política.
 - **Botão Baixar**: `POST /api/contacts/{phone}/messages/{msg_id}/download-media` chama
   `GOWAClient.download_media` (`GET /message/{id}/download?phone=`), valida que o caminho devolvido está em
-  `statics/media` e restaura `media_path`. Sem media-retry no GOWA e sem retry automático: mídia expirada devolve
+  `statics/media` e restaura `media_path`. ⚠️ O GOWA grava esse download em `<telefone>/<AAAA-MM-DD>/` e **sem
+  extensão** (o `DownloadMedia` dele monta a mensagem sem o mimetype), enquanto o auto-download grava solto na
+  raiz de `statics/media/`. Por isso o endpoint chama `media_policy.settle_download`, que move o arquivo para a
+  raiz, acrescenta a extensão pelo conteúdo (`file_manager.preview_mime` + `extension_for`; tipo desconhecido
+  mantém o nome) e remove só as pastas que ficaram vazias (`rmdir`, nunca a raiz). Sem isso a tela Arquivos
+  mostrava uma "Pasta" com um "Documento" dentro. Falha de filesystem na mudança deixa o arquivo onde estava e
+  a mensagem continua apontando para um arquivo que existe. Sem media-retry no GOWA e sem retry automático: mídia expirada devolve
   410 ("não está mais disponível no WhatsApp"). O prazo real de expiração no WhatsApp não é oficial (dias a poucas
   semanas) e **não foi medido** com GOWA real.
 - **WS** `message_media_updated` `{phone, msg_id, media_state, media_path}` troca o balão sem recarregar;
@@ -535,7 +542,56 @@ plugins ficam fora da v1 (entram só no total como "Sistema e dados do app"). Re
 - recusa `..`, `\`, caminho absoluto, byte nulo, symlink (no alvo ou em qualquer ancestral), a própria raiz e tudo que
   não seja arquivo/pasta regular; symlinks nunca são listados;
 - apagar pasta remove só o que há dentro dela; nunca remove a raiz; no máximo 1000 ids por chamada;
-- o preview força `attachment` e `application/octet-stream` para HTML/SVG, com `nosniff`;
+- o preview (`GET /api/files/{id}/preview`) decide o que mostrar em **um só lugar**, `file_manager.preview_mime()`, e
+  responde com o `Content-Type` dessa decisão: tabela de extensões própria (não a do SO, que muda entre Windows e
+  Linux e não conhece `.jfif`/`.pjpeg`), depois os primeiros bytes (assinatura de imagem/áudio/vídeo/PDF, ou "é texto
+  UTF-8?"), de modo que um arquivo sem extensão ou com extensão estranha ainda abre. `None` = só download
+  (`attachment` + `application/octet-stream`). HTML/XHTML/SVG **nunca** saem inline, qualquer que seja o conteúdo, e
+  toda resposta leva `nosniff`. O visualizador de [FileManager.js](web/static/js/components/FileManager.js) segue o
+  `Content-Type` recebido (não adivinha pelo nome): imagem, vídeo, áudio, PDF (`<iframe>` de `blob:`, por isso o CSP
+  tem `frame-src 'self' blob:`) e texto (até 256 KB, UTF-8 com fallback Windows-1252). Se o navegador não decodifica
+  (HEIC fora do Safari, AMR) ou o tipo não tem visualização (Word, Excel, zip), mostra o cartão **Baixar**. Não há
+  conversão no servidor nem biblioteca extra. Ao acrescentar um formato, mexa na tabela `_MIME_BY_EXT` e em
+  `IMAGE_EXT`/`AUDIO_EXT`/`VIDEO_EXT` (filtro por tipo), e cubra em `tests/test_file_manager.py`;
+- **nome mostrado = nome que o remetente deu**, não o do disco (o GOWA grava `<epoch>-<uuid>.<ext>`). O WhatsApp só carrega
+  nome para **documentos**; foto, vídeo e áudio chegam sem nome, e o `filename` que o chat storage do GOWA devolve para
+  eles (`image_<data>.jpg`) é **inventado pelo próprio GOWA** (no chatstorage real o mesmo nome se repete em mensagens de
+  datas diferentes), então NÃO é usado: mídia sem nome mantém o nome do disco. O nome é gravado em `messages.media_name`
+  nos três pontos de gravação do webhook (lote de mídia, grupo sem menção, eco do celular) por `_media_name()`, e nos
+  envios do painel/sandbox (`send-image/audio/document`; `voice.ogg`/`image.png` são nomes que o próprio frontend dá e
+  ficam como `NULL`, via `file_manager.upload_name`). Mensagens anteriores à coluna (migration `0013`, sem backfill) têm o
+  nome só no texto `[Documento recebido: nome.ext]`; `file_manager.name_from_content` o recupera, e o placeholder
+  `documento` nunca vira nome. A listagem resolve por `media_path` em `files._sender_names` (uma consulta por página;
+  `sort=name` resolve tudo para ordenar pelo que se vê). Tudo que o remetente escreve passa por `file_manager.clean_name`:
+  última parte do caminho, sem `<>:"|?*` nem controles, sem ponto/espaço no fim, no máximo 200 caracteres preservando a
+  extensão. `final_name` completa a extensão do disco quando o nome veio sem. O download (`GET /api/files/{id}/preview`)
+  responde `Content-Disposition` com esse nome (`filename*=utf-8''` quando tem acento). **O `id` e o `rel` continuam
+  sendo do arquivo real**, é o nome que muda, nunca o caminho;
+- a coluna **Conversa** é um link para a mensagem exata: cada item com mensagem traz `origin.contact_id` e
+  `origin.message_id` (`contacts.id` e `messages.id`; se várias mensagens apontam para o mesmo arquivo vale a mais
+  antiga), e o link é `/contacts/<contact_id>?msg=<message_id>`. `app.js` lê o `?msg=` junto com o id do contato
+  (`initialMessageId`) e `Contacts.js` o entrega a `scrollToMsg`, que abre a página em torno da mensagem
+  (`around`) e a destaca. Se o contato não está na lista da caixa de entrada, a tela procura uma vez nas
+  arquivadas e, não achando em nenhuma, volta para a caixa de entrada sem ficar em loop;
+- **filtros da lista** (busca, conversa, individual/grupo, período; `FileManager.js`): os que precisam do banco
+  entram em `list_entries` por um único `selector(entry, media_path)` montado em `files.build_selector`, então
+  `file_manager.py` continua sem acesso a banco. Ele devolve `None` (descarta) ou campos extras da linha
+  (`match` = `name`/`text`, `snippet`). Uma consulta só (`message_repo.media_message_rows`) cobre a requisição
+  inteira; não volte a consultar por página de 500 caminhos, porque o filtro olha **todos** os arquivos. O período
+  (`date_from`/`date_to`) é aplicado em `list_entries` sobre o `mtime`, e **o navegador manda a meia-noite local**
+  de cada dia: o servidor nunca adivinha fuso. A busca usa `db/textmatch.py` (`fold`/`match_snippet`, o mesmo da
+  busca de conversas: sem diferença de acento nem de maiúscula) e lê o texto por `file_manager.searchable_text`,
+  que tira os marcadores que o app grava (`[Áudio recebido]`, `[Descrição da imagem]:`...), senão procurar
+  "recebido" casaria com tudo. `contact_repo.search_ids` resolve a conversa (nome, nome do grupo, telefone com ou
+  sem 55/9 extra; o id interno de um grupo nunca casa por dígitos). Arquivo sem mensagem não pertence a nenhuma
+  conversa e some quando há filtro de conversa ou de individual/grupo. O campo **Conversa** é o
+  [ConversationPicker.js](web/static/js/components/ConversationPicker.js): ao digitar, `GET /api/files/conversations`
+  (`contact_repo.suggest`, que reaproveita as regras de `search_ids` para a lista oferecer exatamente o que o filtro
+  acha) mostra foto + nome + número (grupo: "Grupo", sem número), porque dois clientes podem ter o mesmo nome. Escolher
+  um manda `contact_id` (id exato, vence o texto) e o campo vira um cartão com **×**; só digitar continua sendo a busca
+  por texto de antes. Reusa `DefaultAvatar`/`GroupAvatar`/`avatarUrl` do chat. Os filtros valem nas duas abas e não são
+  limpos ao trocar de aba; o rodapé mostra contagem e bytes **do filtro**. Testes em
+  `tests/test_file_manager.py` (período, selector, `searchable_text`) e `tests/test_endpoints.py` ("File manager (filters)");
 - log só com contagens e bytes, nunca nomes de arquivo.
 
 `WHATSBOT_DISK_LIMIT_GB` (env, vazia = sem limite) alimenta a barra de uso e trava o campo na tela; sem a env, o
@@ -544,7 +600,8 @@ usuário define o limite em `disk_limit_gb` pela própria tela. É só informati
 | Método | Endpoint | Descrição |
 |--------|----------|-----------|
 | GET | `/api/files/usage` | Totais (recebidos, enviados, "sistema") + limite/percentual; `?refresh=true` ignora o cache de 30 s |
-| GET | `/api/files?root=&path=&flat=&sort=&order=&kind=&orphans=&offset=&limit=` | Lista paginada; `root` ∈ `received`/`sent`; `orphans=true` = sem mensagem |
+| GET | `/api/files/conversations?q=&limit=` | Sugestões do campo **Conversa**: contatos/grupos que `q` nomeia (mesma regra de `contact_repo.search_ids`), cada um com `id`, `phone`, `name`, `is_group` e `avatar_v`. Só leitura; máx. 20 |
+| GET | `/api/files?root=&path=&flat=&sort=&order=&kind=&orphans=&q=&conversation=&contact_id=&chat_type=&date_from=&date_to=&offset=&limit=` | Lista paginada; `root` ∈ `received`/`sent`; `orphans=true` = sem mensagem; `q` busca no nome mostrado e no texto da mensagem (legenda, transcrição, descrição); `conversation` = nome/número/grupo (texto livre: pega todo contato que combina); `contact_id` = `contacts.id` exato escolhido nas sugestões e **vence** `conversation`; `chat_type` ∈ `individual`/`group`; `date_from`/`date_to` em segundos epoch (`date_to` exclusivo) sobre o mesmo `mtime` mostrado |
 | GET | `/api/files/{id}/preview` | Serve o arquivo (`?download=true` força download) |
 | POST | `/api/files/delete` | `{ids}` → apaga, marca `media_state='removed'`, devolve `{files, bytes, failed, messages}` |
 | POST | `/api/contacts/{phone}/messages/{msg_id}/download-media` | Busca de novo no WhatsApp um arquivo descartado/removido |

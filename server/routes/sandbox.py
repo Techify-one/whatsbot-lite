@@ -14,6 +14,7 @@ from pathlib import Path
 from fastapi import File, Form, UploadFile
 
 from db.repositories import config_repo
+from server import file_manager
 from server.execution import astart_execution, aend_execution, atrack_step, prune_executions
 from server.helpers import _ok, _err, parse_split_reply
 
@@ -178,7 +179,8 @@ def register_routes(app, deps):
         try:
             await atrack_step("webhook_received", {"phone": phone, "media": "image"})
             contact = agent_handler._get_contact(phone)
-            contact.add_message("user", caption, media_type="image", media_path=rel_path)
+            contact.add_message("user", caption, media_type="image", media_path=rel_path,
+                                media_name=file_manager.upload_name(image.filename) or None)
             await _broadcast_user_message(phone, caption, media_type="image", media_path=rel_path)
 
             description = ""
@@ -237,7 +239,8 @@ def register_routes(app, deps):
         try:
             await atrack_step("webhook_received", {"phone": phone, "media": "audio"})
             contact = agent_handler._get_contact(phone)
-            contact.add_message("user", "[Áudio recebido]", media_type="audio", media_path=rel_path)
+            contact.add_message("user", "[Áudio recebido]", media_type="audio", media_path=rel_path,
+                                media_name=file_manager.upload_name(audio.filename) or None)
             await _broadcast_user_message(phone, "[Áudio recebido]",
                                           media_type="audio", media_path=rel_path)
 
@@ -297,7 +300,8 @@ def register_routes(app, deps):
         try:
             await atrack_step("webhook_received", {"phone": phone, "media": "document"})
             contact = agent_handler._get_contact(phone)
-            contact.add_message("user", content, media_type="document", media_path=rel_path)
+            contact.add_message("user", content, media_type="document", media_path=rel_path,
+                                media_name=file_manager.clean_name(filename) or None)
             await _broadcast_user_message(phone, content,
                                           media_type="document", media_path=rel_path)
 

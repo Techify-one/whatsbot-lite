@@ -106,6 +106,14 @@ function contactIdFromPath() {
   return m ? parseInt(m[1], 10) : null;
 }
 
+// `/contacts/<id>?msg=<message id>` opens the conversation on that message
+// (the Arquivos screen links to the message that carries a file).
+function contactMessageFromPath() {
+  if (contactIdFromPath() == null) return null;
+  const v = new URLSearchParams(window.location.search).get('msg');
+  return /^\d+$/.test(v || '') ? parseInt(v, 10) : null;
+}
+
 function MenuItem({ active, href, onClick, icon, children }) {
   function handleClick(e) {
     // Let the browser handle modified clicks (Ctrl/Cmd/Shift) and middle-click
@@ -294,6 +302,7 @@ function App({ onLogout, hasPassword }) {
   const [gowaProgress, setGowaProgress] = useState(null);
   const [gowaInstalling, setGowaInstalling] = useState(false);
   const [initialContactId, setInitialContactId] = useState(contactIdFromPath);
+  const [initialMessageId, setInitialMessageId] = useState(contactMessageFromPath);
   const [wizardManual, setWizardManual] = useState(() => window.location.pathname === '/wizard');
   const wizardLatchRef = useRef(false);
 
@@ -346,6 +355,7 @@ function App({ onLogout, hasPassword }) {
     function onPopState() {
       setTabState(tabFromPath(pluginScreens));
       setInitialContactId(contactIdFromPath());
+      setInitialMessageId(contactMessageFromPath());
       setWizardManual(window.location.pathname === '/wizard');
     }
     window.addEventListener('popstate', onPopState);
@@ -708,7 +718,7 @@ function App({ onLogout, hasPassword }) {
                   />
                 </div>`
               : tab === 'contacts'
-                ? html`<${Contacts} newMessage=${newMessage} chatPresence=${chatPresence} contactInfoUpdated=${contactInfoUpdated} tagsChanged=${tagsChanged} contactTagsUpdated=${contactTagsUpdated} contactAiToggled=${contactAiToggled} messagesRead=${messagesRead} messageStatus=${messageStatus} messageAction=${messageAction} messageReaction=${messageReaction} mediaUpdated=${mediaUpdated} avatarUpdated=${avatarUpdated} groupParticipantsChanged=${groupParticipantsChanged} initialContactId=${initialContactId} wsConnected=${wsConnected} config=${config} onConfigSave=${save} onUnreadChange=${refreshUnreadCount} />`
+                ? html`<${Contacts} newMessage=${newMessage} chatPresence=${chatPresence} contactInfoUpdated=${contactInfoUpdated} tagsChanged=${tagsChanged} contactTagsUpdated=${contactTagsUpdated} contactAiToggled=${contactAiToggled} messagesRead=${messagesRead} messageStatus=${messageStatus} messageAction=${messageAction} messageReaction=${messageReaction} mediaUpdated=${mediaUpdated} avatarUpdated=${avatarUpdated} groupParticipantsChanged=${groupParticipantsChanged} initialContactId=${initialContactId} initialMessageId=${initialMessageId} wsConnected=${wsConnected} config=${config} onConfigSave=${save} onUnreadChange=${refreshUnreadCount} />`
                 : tab === 'costs'
                   ? html`<div class="max-w-5xl mx-auto p-4">
                       <${PageHeader} title="Custos de IA" onBack=${() => setTab('contacts')} />

@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 import time
-import unicodedata
 
 from sqlalchemy import case
 from sqlalchemy import func
@@ -14,18 +13,7 @@ from sqlalchemy import update as sa_update
 
 from db.engine import get_engine
 from db.tables import contact_tags, contacts, observations, tags, unread_msg_ids
-
-
-def _fold(s: str) -> str:
-    """Casefold and strip accents so search matches regardless of diacritics.
-
-    "Ó"/"ó"/"o" all fold to "o", so typing an unaccented letter still finds
-    accented names (and vice-versa).
-    """
-    if not s:
-        return ""
-    nfkd = unicodedata.normalize("NFKD", s)
-    return "".join(ch for ch in nfkd if not unicodedata.combining(ch)).casefold()
+from db.textmatch import fold as _fold, match_snippet as _match_snippet
 
 
 def _br_phone_variants(phone: str) -> list[str]:
@@ -129,6 +117,78 @@ def display_names(phones: list[str]) -> dict[str, dict]:
                 label = (r["group_name"] if r["is_group"] else r["name"]) or ""
                 found[r["phone"]] = {"name": label.lstrip("~").strip(), "is_group": bool(r["is_group"])}
     return found
+
+def _matching_rows(q: str) -> list[dict]:
+    """The contact/group rows that ``q`` names (see :func:`search_ids` for the rules)."""
+    folded = _fold((q or "").strip())
+    if not folded:
+        return []
+    digits = "".join(ch for ch in q if ch.isdigit())
+    # "(11) 99999-0001" is a number; "Grupo 2" is a name that happens to hold a digit.
+    by_number = len(digits) >= 3 and not any(ch.isalpha() for ch in q)
+    wanted: list[str] = []
+    if by_number:
+        # Typed with or without the country code, with or without the extra 9.
+        for base in dict.fromkeys([digits, digits if digits.startswith("55") else "55" + digits]):
+            wanted.extend(_br_phone_variants(base))
+    with get_engine().connect() as conn:
+        rows = conn.execute(
+            select(contacts.c.id, contacts.c.phone, contacts.c.name,
+                   contacts.c.is_group, contacts.c.group_name, contacts.c.updated_at)
+        ).mappings().all()
+    hits: list[dict] = []
+    for r in rows:
+        if r["is_group"]:
+            hit = folded in _fold(r["group_name"] or "")
+        else:
+            hit = (folded in _fold(r["name"] or "") or folded in r["phone"]
+                   or any(d in r["phone"] for d in wanted))
+        if hit:
+            hits.append(dict(r))
+    return hits
+
+def search_ids(q: str) -> set[int]:
+    """Ids of the contacts and groups that ``q`` names.
+
+    Matches the contact name or the group name (accent/case-insensitive) and, for
+    people, the phone number: a number typed the way people write it, with spaces,
+    parentheses or dashes, finds the contact, and so does the Brazilian number
+    with or without the extra 9. A group's own id is never matched by digits (it
+    is an internal code, not something anybody types). Nothing is created.
+    """
+    return {r["id"] for r in _matching_rows(q)}
+
+def suggest(q: str, limit: int = 8) -> list[dict]:
+    """Contacts and groups that ``q`` names, for a "pick the conversation" list.
+
+    Same matching as :func:`search_ids`, so what the list offers is exactly what
+    the filter then finds. Each hit carries what is needed to tell two people
+    with the same name apart (the phone number) plus the label the app shows
+    elsewhere; people whose name starts with ``~`` (taken from WhatsApp) lose it.
+    Best matches first (name starting with the text), then the most recently
+    active. Nothing is created.
+    """
+    hits = _matching_rows(q)
+    if not hits:
+        return []
+    folded = _fold((q or "").strip())
+
+    def label(r: dict) -> str:
+        return ((r["group_name"] if r["is_group"] else r["name"]) or "").lstrip("~").strip()
+
+    hits.sort(key=lambda r: (
+        0 if _fold(label(r)).startswith(folded) else 1,
+        -(r["updated_at"] or 0),
+    ))
+    return [
+        {
+            "id": r["id"],
+            "phone": r["phone"],
+            "name": label(r),
+            "is_group": bool(r["is_group"]),
+        }
+        for r in hits[:max(1, limit)]
+    ]
 
 def get_by_phone(phone: str) -> dict | None:
     """Get a contact by phone number. Checks BR phone variants."""
@@ -310,36 +370,6 @@ def add_observation(contact_id: int, text: str) -> None:
         conn.execute(sa_insert(observations).values(
             contact_id=contact_id, text=text, created_at=time.time()
         ))
-
-
-def _match_snippet(content: str, folded_q: str, radius: int = 40) -> str:
-    """A short excerpt of ``content`` centered on the first match of ``folded_q``,
-    with ellipses when trimmed. Matching is accent/case-insensitive (via ``_fold``),
-    but the snippet keeps the ORIGINAL text (accents intact) for display.
-    """
-    if not content:
-        return ""
-    # Per-character fold, tracking the original index each folded char came from,
-    # so a match position in the folded string maps back to the original text.
-    folded_chars: list[str] = []
-    orig_idx: list[int] = []
-    for i, ch in enumerate(content):
-        for fc in _fold(ch):
-            folded_chars.append(fc)
-            orig_idx.append(i)
-    folded = "".join(folded_chars)
-    pos = folded.find(folded_q)
-    if pos < 0:
-        return content[: radius * 2].strip()
-    start = orig_idx[pos]
-    end_f = min(pos + len(folded_q), len(orig_idx)) - 1
-    end = orig_idx[end_f] + 1 if end_f >= 0 else start
-    w_start = max(0, start - radius)
-    w_end = min(len(content), end + radius)
-    excerpt = content[w_start:w_end].strip()
-    prefix = "…" if w_start > 0 else ""
-    suffix = "…" if w_end < len(content) else ""
-    return f"{prefix}{excerpt}{suffix}"
 
 
 def _contact_ids_matching_message(folded_q: str, archived: bool) -> dict[int, dict]:
