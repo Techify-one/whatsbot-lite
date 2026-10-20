@@ -44,7 +44,7 @@ class GOWASendError(Exception):
 
 
 class GOWAClient:
-    """HTTP client for the GOWA REST API (go-whatsapp-web-multidevice v8.8.0)."""
+    """HTTP client for the GOWA REST API (go-whatsapp-web-multidevice v9.6.0)."""
 
     def __init__(self, port: int = 3000, timeout: float = 15.0):
         self.base_url = f"http://127.0.0.1:{port}"

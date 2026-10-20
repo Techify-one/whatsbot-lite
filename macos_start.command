@@ -18,7 +18,7 @@ WEB_PORT="${WHATSBOT_WEB_PORT:-8080}"
 # Versao do GOWA. Fonte unica: o arquivo GOWA_VERSION na raiz do repo, o mesmo
 # lido pelo Dockerfile e por gowa/binary.py. Resolvido antes do cd, entao usa
 # dirname "$0". Override por env se precisar.
-GOWA_VERSION="${GOWA_VERSION:-$(cat "$(dirname "$0")/GOWA_VERSION" 2>/dev/null || echo 8.8.0)}"
+GOWA_VERSION="${GOWA_VERSION:-$(cat "$(dirname "$0")/GOWA_VERSION" 2>/dev/null || echo 9.6.0)}"
 # Versão do Python instalada automaticamente quando nenhuma 3.11+ é encontrada.
 PY_VERSION="${PY_VERSION:-3.12.8}"
 

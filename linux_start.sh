@@ -41,7 +41,7 @@ cd "$(dirname "$0")"
 
 # Versão do GOWA. Fonte única: o arquivo GOWA_VERSION na raiz do repo, o mesmo
 # lido pelo Dockerfile e por gowa/binary.py. Override por env se precisar.
-GOWA_VERSION="${GOWA_VERSION:-$(cat ./GOWA_VERSION 2>/dev/null || echo 8.8.0)}"
+GOWA_VERSION="${GOWA_VERSION:-$(cat ./GOWA_VERSION 2>/dev/null || echo 9.6.0)}"
 
 require_cmd() {
     if ! command -v "$1" >/dev/null 2>&1; then

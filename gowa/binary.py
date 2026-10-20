@@ -29,7 +29,7 @@ logger = logging.getLogger(__name__)
 
 # Fallback used only when the GOWA_VERSION file is missing (e.g. a partial
 # checkout). Keep in sync with the GOWA_VERSION file at the repo root.
-GOWA_BASELINE_VERSION = "8.8.0"
+GOWA_BASELINE_VERSION = "9.6.0"
 
 # Escape hatch for dev/CI: point at an arbitrary GOWA binary.
 ENV_BINARY_OVERRIDE = "WHATSBOT_GOWA_BINARY"

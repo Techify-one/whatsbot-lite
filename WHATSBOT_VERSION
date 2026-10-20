@@ -1,6 +1,10 @@
 {
-  "version": "0.2.12",
+  "version": "0.2.13",
   "changelog": [
+    {
+      "version": "0.2.13",
+      "description": "- O motor do WhatsApp (GOWA) foi atualizado da versão 8.8.0 para a 9.6.0; quem instala esta release do zero já recebe a versão nova\n- Correções do GOWA: o QR Code de login não fica mais desatualizado, mensagens de contas WhatsApp Business deixam de aparecer em branco e o telefone volta a aparecer em contatos compartilhados do iPhone\n- Linux, macOS e Docker baixam o GOWA 9.6.0 sozinhos\n- Atenção, Windows: quem já usa o WhatsBot-Lite e atualiza pelo botão do painel mantém o gowa.exe antigo (a pasta bin é preservada na atualização) e o painel pode mostrar 9.6.0 mesmo assim. Para usar o 9.6.0, baixe o zip desta release e substitua o arquivo bin/gowa.exe"
+    },
     {
       "version": "0.2.12",
       "description": "- Nova opção Religar a IA automaticamente na conversa, em Painel → Agente → Automação: a IA volta sozinha nas conversas em que foi desligada (transferência para atendente, desligada à mão ou desligada por padrão em novos contatos)\n- Escolha religar após um tempo sem mensagens (minutos, horas ou dias) ou em dias da semana e horário definidos\n- Filtre pelo dono da última mensagem: cliente, atendente ou qualquer um\n- Grupos e conversas arquivadas só são religados se você marcar; a etiqueta transferido_atendente é removida ao religar\n- A opção vem desligada por padrão"
