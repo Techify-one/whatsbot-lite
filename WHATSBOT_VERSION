@@ -1,6 +1,10 @@
 {
-  "version": "0.2.11",
+  "version": "0.2.12",
   "changelog": [
+    {
+      "version": "0.2.12",
+      "description": "- Nova opção Religar a IA automaticamente na conversa, em Painel → Agente → Automação: a IA volta sozinha nas conversas em que foi desligada (transferência para atendente, desligada à mão ou desligada por padrão em novos contatos)\n- Escolha religar após um tempo sem mensagens (minutos, horas ou dias) ou em dias da semana e horário definidos\n- Filtre pelo dono da última mensagem: cliente, atendente ou qualquer um\n- Grupos e conversas arquivadas só são religados se você marcar; a etiqueta transferido_atendente é removida ao religar\n- A opção vem desligada por padrão"
+    },
     {
       "version": "0.2.11",
       "description": "- Nova tela Arquivos: veja, busque e apague os arquivos recebidos e enviados\n- Download automático de mídia configurável por tipo (áudio, imagem, vídeo, documento), em conversas individuais e em grupos\n- Botão Baixar para recuperar um arquivo que não foi guardado\n- Busca por nome, texto, conversa e período; o nome mostrado é o que o remetente deu ao arquivo"
