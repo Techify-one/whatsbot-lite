@@ -207,6 +207,48 @@ check("PUT /api/config -> group_reply_mode persisted",
       r.json()["data"]["group_reply_mode"] == "always")
 client.put("/api/config", json={"group_reply_mode": "mention_only"})
 
+# Automatic AI re-enabling: off by default, validated on the way in, and the
+# server-owned keys cannot be written from the panel.
+_react = client.get("/api/config").json()["data"]
+check("AI reactivation: off by default", _react["ai_reactivation_enabled"] is False)
+check("AI reactivation: groups/archived off by default",
+      _react["ai_reactivation_include_groups_archived"] is False)
+check("AI reactivation: exposes the rule's fields",
+      all(f"ai_reactivation_{k}" in _react for k in
+          ("unit", "value", "weekdays", "time", "last_sender", "timezone")))
+r = client.put("/api/config", json={
+    "ai_reactivation_enabled": True, "ai_reactivation_unit": "schedule",
+    "ai_reactivation_weekdays": [4, 0, 0, 9], "ai_reactivation_time": "18:30",
+    "ai_reactivation_last_sender": "customer", "ai_reactivation_value": "0",
+    "ai_reactivation_include_groups_archived": True,
+    "ai_reactivation_timezone": "America/Sao_Paulo",
+})
+check("PUT /api/config (AI reactivation) -> 200", r.status_code == 200)
+_react = client.get("/api/config").json()["data"]
+check("AI reactivation: values persisted, weekdays cleaned",
+      _react["ai_reactivation_enabled"] is True and _react["ai_reactivation_unit"] == "schedule"
+      and _react["ai_reactivation_weekdays"] == [0, 4] and _react["ai_reactivation_time"] == "18:30"
+      and _react["ai_reactivation_last_sender"] == "customer"
+      and _react["ai_reactivation_include_groups_archived"] is True)
+check("AI reactivation: value is clamped to at least 1", _react["ai_reactivation_value"] == 1)
+client.put("/api/config", json={
+    "ai_reactivation_unit": "weeks", "ai_reactivation_time": "25:99",
+    "ai_reactivation_last_sender": "robot", "ai_reactivation_enabled": "yes",
+    "ai_reactivation_last_run": 123.0,
+})
+_react = client.get("/api/config").json()["data"]
+check("AI reactivation: invalid values are ignored, not stored",
+      _react["ai_reactivation_unit"] == "schedule" and _react["ai_reactivation_time"] == "18:30"
+      and _react["ai_reactivation_last_sender"] == "customer" and _react["ai_reactivation_enabled"] is True)
+check("AI reactivation: last_run is not writable from the panel",
+      settings.get("ai_reactivation_last_run") != 123.0)
+client.put("/api/config", json={
+    "ai_reactivation_enabled": False, "ai_reactivation_unit": "hours",
+    "ai_reactivation_include_groups_archived": False,
+    "ai_reactivation_weekdays": [0, 1, 2, 3, 4], "ai_reactivation_time": "08:00",
+    "ai_reactivation_last_sender": "both", "ai_reactivation_value": 24,
+})
+
 # setup_completed flag round-trips through PUT
 r = client.put("/api/config", json={"setup_completed": True})
 check("PUT /api/config (setup_completed) -> 200", r.status_code == 200)

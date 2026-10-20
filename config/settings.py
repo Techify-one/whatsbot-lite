@@ -114,6 +114,24 @@ DEFAULT_CONFIG = {
     "transfer_alert_enabled": True,
     "transfer_alert_duration": 5,
     "group_reply_mode": "mention_only",
+    # --- Religar a IA automaticamente ------------------------------------------
+    # Liga de novo a IA em conversas em que ela foi desligada (transferência,
+    # atendente ou padrão de novos contatos). Regra em server/ai_reactivation.py.
+    # ``unit``: minutes | hours | days (tempo parado, contado da última mensagem)
+    # ou schedule (dias da semana + hora; 0 = segunda). ``last_sender``: both |
+    # customer | attendant. ``timezone`` é o fuso do navegador de quem salvou
+    # (vazio = fuso do servidor). ``last_run`` e ``provisioning_phones`` são
+    # escritos pelo servidor.
+    "ai_reactivation_enabled": False,
+    "ai_reactivation_unit": "hours",
+    "ai_reactivation_value": 24,
+    "ai_reactivation_weekdays": [0, 1, 2, 3, 4],
+    "ai_reactivation_time": "08:00",
+    "ai_reactivation_last_sender": "both",
+    "ai_reactivation_include_groups_archived": False,
+    "ai_reactivation_timezone": "",
+    "ai_reactivation_last_run": 0.0,
+    "provisioning_phones": [],
     # --- Download automático de mídia recebida ---------------------------------
     # O GOWA continua baixando tudo (só tem liga/desliga geral); o app descarta o
     # arquivo que esta matriz não permite. Figurinha segue a linha "image".

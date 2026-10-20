@@ -69,6 +69,7 @@ gowa/binary.py       → resolve qual binário rodar (bin/ bundled vs storages/b
 gowa/updater.py      → download/verificação/swap/rollback do binário GOWA
 gowa/proxy.py        → proxy de saída da conexão do WhatsApp (validação, URL, teste de conexão)
 server/routes/gowa_update.py → endpoints /api/gowa/* (versão, check, update, rollback, skip, proxy)
+server/ai_reactivation.py → religar a IA automaticamente (regra pura + `run_once`); laço em `server/background.py`
 server/media_policy.py → política de download automático de mídia (matriz tipo × individual/grupo, guarda de caminho)
 server/file_manager.py → listagem e remoção segura de statics/media e statics/operator (allowlist, ids opacos)
 server/routes/files.py → endpoints /api/files/* da tela Arquivos
@@ -157,7 +158,7 @@ Para Docker: setar `DATABASE_URL` no `.env` antes de subir o container — o arq
 | Tabela | Descrição |
 |--------|-----------|
 | `config` | Configurações do app (key-value, valores JSON-encoded). Configs de plugin usam prefixo `plugin.<id>.` |
-| `contacts` | Contatos/grupos (phone, name, email, profissão, empresa, flags). Inclui `is_pinned` (fixar conversa no topo) e `has_unread_mention` (@menção não lida em grupo) |
+| `contacts` | Contatos/grupos (phone, name, email, profissão, empresa, flags). Inclui `is_pinned` (fixar conversa no topo), `has_unread_mention` (@menção não lida em grupo) e `ai_disabled_at` (epoch de quando a IA foi desligada; `NULL` = desconhecido; só `ContactMemory.set_ai_enabled` o grava) |
 | `observations` | Notas/observações por contato (texto livre) |
 | `messages` | Histórico completo de mensagens (role, content, ts, media). Inclui `revoked` (apagada pra todos), `reactions` (JSON `{emoji: [reactor,...]}`), `reply_to_msg_id` (msg_id GOWA da mensagem citada) `media_state` (`NULL` normal, `discarded` = arquivo não guardado pela política de download, `removed` = apagado depois na tela Arquivos; nos dois casos `media_path` fica `NULL` e `media_type` é mantido) e `media_name` (nome que o remetente deu ao arquivo, já passado por `file_manager.clean_name`; `NULL` = desconhecido, ver [Tela Arquivos](#download-automático-de-mídia-e-tela-arquivos)). `media_path` é indexado |
 | `usage` | Registros de uso da API (tokens, custo, modelo) |
@@ -885,7 +886,7 @@ Toggle do plugin = tudo-ou-nada: enable liga handlers e filters; disable derruba
 | `llm.before` / `llm.after` | `aprocess_message`/`process_message` antes/depois de `chat.completions.create`. `after`: `reply, tool_calls, usage, latency_ms` |
 | `tool.before` / `tool.after` | `_dispatch_tool`. `after`: `result, error, latency_ms` |
 | `contact.updated` | PUT `/api/contacts/{phone}/info` |
-| `contact.ai_toggled` | POST `/api/contacts/{phone}/toggle-ai` |
+| `contact.ai_toggled` | POST `/api/contacts/{phone}/toggle-ai`; também o religar automático (`source: "auto_reactivation"` no payload) |
 | `contact.tagged` | PUT `/api/contacts/{phone}/tags` (snapshot completo da lista de tags) |
 | `contact.untagged` | **NOVO** — um emit POR tag removida em PUT `/api/contacts/{phone}/tags` (`{phone, tag, ts}`) |
 | `tag.created` / `tag.updated` / `tag.deleted` | tag endpoints |

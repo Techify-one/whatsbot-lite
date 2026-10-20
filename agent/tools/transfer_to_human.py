@@ -4,6 +4,9 @@ import logging
 
 logger = logging.getLogger(__name__)
 
+# Tag put on the conversation by this tool. The automatic AI re-enabling removes
+# it again (server/ai_reactivation.py), so the two must agree on the name.
+TRANSFER_TAG = "transferido_atendente"
 
 TRANSFER_TO_HUMAN_TOOL = {
     "type": "function",
@@ -49,8 +52,8 @@ def execute(ctx, args: dict) -> str | None:
     """
     try:
         ctx.contact.set_ai_enabled(False)
-        ctx.tag_registry.create("transferido_atendente", "#ef4444")
-        ctx.contact.add_tag("transferido_atendente")
+        ctx.tag_registry.create(TRANSFER_TAG, "#ef4444")
+        ctx.contact.add_tag(TRANSFER_TAG)
         ctx.contact.save()
         logger.info("Transfer to human for %s: %s", ctx.contact.phone, args.get("reason", ""))
     except Exception as e:

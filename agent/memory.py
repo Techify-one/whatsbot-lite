@@ -193,7 +193,13 @@ class ContactMemory:
 
     def set_ai_enabled(self, enabled: bool):
         self.ai_enabled = enabled
-        contact_repo.update(self.id, ai_enabled=1 if enabled else 0)
+        # Remember when it went off: the automatic re-enabling waits from here
+        # too (see server/ai_reactivation.py).
+        contact_repo.update(
+            self.id,
+            ai_enabled=1 if enabled else 0,
+            ai_disabled_at=None if enabled else time.time(),
+        )
 
     def set_tags(self, tags: list[str]):
         self.tags = list(tags)

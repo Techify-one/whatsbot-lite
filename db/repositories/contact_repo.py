@@ -47,6 +47,7 @@ def get_or_create(phone: str, default_ai_enabled: bool = True) -> dict:
         result = conn.execute(sa_insert(contacts).values(
             phone=phone,
             ai_enabled=1 if default_ai_enabled else 0,
+            ai_disabled_at=None if default_ai_enabled else now,
             created_at=now,
             updated_at=now,
         ))
@@ -96,6 +97,47 @@ def set_pinned(contact_id: int, pinned: bool) -> None:
             updated_at=time.time(),
         ))
 
+
+def ai_disabled_for_reactivation(include_groups_archived: bool,
+                                 exclude_phones: list[str] | None = None) -> list[dict]:
+    """Conversations whose AI is off, with who spoke last among the humans.
+
+    ``last_role`` is ``'user'`` (the customer) or ``'assistant'`` (the attendant:
+    panel or phone, stored with ``status='operator'``); ``None`` when no human
+    message exists. The AI's own replies, private notes, transcriptions and
+    system rows never count, otherwise the confirmation the AI sends while
+    transferring a conversation would restart the wait. Known blind spot: an
+    audio transcription delivered into the chat is also saved as an operator
+    message and so reads as the attendant.
+
+    Groups and archived conversations come back only when asked for.
+    ``exclude_phones`` are contacts whose AI is off on purpose; the Brazilian
+    8/9-digit variants of each are excluded too.
+    """
+    from sqlalchemy import text as sql_text
+
+    skipped = sorted({v for p in (exclude_phones or []) if p for v in _br_phone_variants(p)})
+
+    human = ("m.contact_id = c.id AND (m.role = 'user' "
+             "OR (m.role = 'assistant' AND m.status = 'operator'))")
+    scope = "" if include_groups_archived else "AND c.is_group = 0 AND c.is_archived = 0"
+    if skipped:
+        scope += " AND c.phone NOT IN :skipped"
+    sql = sql_text(f"""
+        SELECT c.id, c.phone, c.is_group, c.is_archived, c.ai_disabled_at, c.created_at,
+               (SELECT m.ts FROM messages m WHERE {human}
+                ORDER BY m.ts DESC, m.id DESC LIMIT 1) AS last_ts,
+               (SELECT m.role FROM messages m WHERE {human}
+                ORDER BY m.ts DESC, m.id DESC LIMIT 1) AS last_role
+        FROM contacts c
+        WHERE c.ai_enabled = 0 {scope}
+    """)
+    if skipped:
+        from sqlalchemy import bindparam
+        sql = sql.bindparams(bindparam("skipped", expanding=True))
+    with get_engine().connect() as conn:
+        rows = conn.execute(sql, {"skipped": skipped} if skipped else {}).mappings().all()
+    return [dict(r) for r in rows]
 
 def display_names(phones: list[str]) -> dict[str, dict]:
     """Display info for contacts, keyed by the phone/JID asked for.

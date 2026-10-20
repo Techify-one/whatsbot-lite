@@ -75,6 +75,7 @@ def _public_base_url(request: Request) -> str:
 
 
 _HELP_LINK_RULES = (
+    (re.compile(r"religar (?:a )?ia|reativar (?:a )?ia|ia (?:volt|ligar|religa)\w* (?:sozinha|autom[áa]tic)|ligar (?:a )?ia (?:de novo|automatic)", re.I), "/painel?aba=agente#ai-reactivation", "religar a IA automaticamente"),
     (re.compile(r"prompt|instru(?:ç|c)ões? do agente|personalidade|comportamento da ia", re.I), "/painel?aba=agente#prompt", "instruções do agente"),
     (re.compile(r"apagar (?:arquivo|foto|v[íi]deo|m[íi]dia)|liberar espa(?:ç|c)o|espa(?:ç|c)o (?:em disco|usado)|gerenciador de arquivos|armazenamento", re.I), "/arquivos", "arquivos e espaço usado"),
     (re.compile(r"download autom[áa]tico|baixar (?:automaticamente|m[íi]dia|foto|v[íi]deo)|n[ãa]o baixar|guardar (?:foto|v[íi]deo|arquivo)", re.I), "/painel?aba=modelos-midia#download-midia", "download automático de mídia"),

@@ -49,6 +49,10 @@ contacts = Table(
     Column("company", Text, nullable=False, server_default=""),
     Column("address", Text, nullable=False, server_default=""),
     Column("ai_enabled", Integer, nullable=False, server_default="1"),
+    # When the AI was last switched off (epoch). NULL = unknown/never. The
+    # automatic re-enabling counts its wait from here too, so a conversation
+    # switched off by hand is not turned back on because its last message is old.
+    Column("ai_disabled_at", Float),
     Column("is_group", Integer, nullable=False, server_default="0"),
     Column("group_name", Text, nullable=False, server_default=""),
     Column("is_archived", Integer, nullable=False, server_default="0"),

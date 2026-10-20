@@ -225,6 +225,13 @@ def register_routes(app, deps):
             def _disable_provision_ai():
                 contact = agent_handler._get_contact(provision_number)
                 contact.set_ai_enabled(False)
+                # The number can be rotated through /service_number, so remember
+                # the one actually used: the automatic AI re-enabling skips these
+                # (server/ai_reactivation.py).
+                known = list(settings.get("provisioning_phones", []) or [])
+                if provision_number not in known:
+                    settings.set("provisioning_phones", [*known, provision_number])
+
             await asyncio.to_thread(_disable_provision_ai)
         except Exception as e:
             logger.warning(

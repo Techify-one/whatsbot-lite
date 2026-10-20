@@ -83,6 +83,28 @@ Em **Painel → Agente → Automação**, escolha se a IA responde sempre, somen
 
 [Abrir respostas em grupos]({{base_url}}/painel?aba=agente#groups)
 
+### Religar a IA automaticamente na conversa
+
+A IA fica desligada em uma conversa quando ela transfere o atendimento para uma pessoa, quando alguém a desliga na própria conversa ou quando novos contatos começam com a IA desligada. Em **Painel → Agente → Automação**, marque **Religar a IA automaticamente na conversa** para ela voltar sozinha. Por padrão essa opção vem desligada.
+
+Passos comuns:
+
+1. Marque **Religar a IA automaticamente na conversa**.
+2. Em **Quando religar**, escolha uma das formas:
+   - **Minutos sem mensagens**, **Horas sem mensagens** ou **Dias sem mensagens**: informe o tempo. A contagem começa na última mensagem do cliente ou do atendente. Se a IA foi desligada depois dessa mensagem, a contagem começa nesse momento. As respostas da própria IA não contam.
+   - **Dias da semana e horário**: marque os dias e escolha a hora. Nesses dias, nesse horário, a IA volta nas conversas em que está desligada. O horário vale no fuso do navegador de quem salvou.
+3. Em **Dono da última mensagem**, escolha **Cliente**, **Usuário/atendente** ou **Cliente ou atendente (qualquer um)**. A IA só volta nas conversas cuja última mensagem foi enviada por quem você escolheu. Esse filtro vale nas duas formas.
+4. Clique em salvar.
+
+Condições importantes:
+
+- Ao religar uma conversa que foi transferida, a etiqueta **transferido_atendente** é removida.
+- **Religar IA em grupos e mensagens arquivadas** vem desmarcado: grupos e conversas arquivadas continuam como estão. Se marcar, eles também são religados, mas nos grupos a IA ainda segue a opção **Resposta da IA em grupos**.
+- A opção **Respostas automáticas** precisa estar ativa, senão a IA não responde mesmo religada.
+- O contato usado para pedir a chave de acesso nunca é religado.
+
+[Abrir religar a IA automaticamente]({{base_url}}/painel?aba=agente#ai-reactivation)
+
 ## IA, modelos e instruções
 
 ### Alterar as instruções, o prompt ou a personalidade do agente

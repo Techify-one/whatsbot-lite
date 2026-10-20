@@ -9,7 +9,13 @@ from db.repositories import contact_repo
 from agent import group_mentions
 from gowa import updater as gowa_updater
 from plugins.events import emit as emit_event, emit_with_filter
+from server import ai_reactivation
 from server.avatars import refresh_and_broadcast
+
+# How often the AI re-enabling rule is evaluated, and the pause after boot. One
+# minute is fine enough for a "HH:MM" schedule and for minute-based waits.
+AI_REACTIVATION_INTERVAL = 60  # seconds
+AI_REACTIVATION_DELAY = 20     # seconds
 
 # How often the background sweep re-checks every contact's avatar for changes.
 AVATAR_REFRESH_INTERVAL = 1800  # seconds (30 min)
@@ -236,6 +242,25 @@ async def avatar_fetch_task(deps):
             await asyncio.sleep(3)
             slept += 3
 
+
+async def ai_reactivation_loop(deps):
+    """Turn the AI back on, per the rule in Painel → Agente → Automação.
+
+    Wakes every ``AI_REACTIVATION_INTERVAL`` seconds. The rule itself (what is
+    due, who qualifies) lives in :mod:`server.ai_reactivation`; this only paces
+    it and keeps one failed pass from stopping the loop.
+    """
+    state = deps.state
+    await asyncio.sleep(AI_REACTIVATION_DELAY)
+    while not state.stop_event.is_set():
+        try:
+            await ai_reactivation.run_once(deps)
+        except Exception as e:
+            logger.error("[AI reactivation] pass failed: %s", e)
+        slept = 0
+        while slept < AI_REACTIVATION_INTERVAL and not state.stop_event.is_set():
+            await asyncio.sleep(3)
+            slept += 3
 
 async def gowa_update_check_loop(deps):
     """Check once a day whether a newer GOWA was released.

@@ -11,7 +11,7 @@ import httpx
 from config.settings import LLM_API_BASE_URL
 from server.auth import generate_salt, hash_password
 from server.helpers import _ok, _err, _mask_key
-from server import balance_monitor, media_policy
+from server import ai_reactivation, balance_monitor, media_policy
 from agent import group_mentions
 from plugins.events import emit as emit_event, emit_with_filter
 
@@ -56,6 +56,7 @@ def register_routes(app, deps):
             "document_model": settings.get("document_model", "google/gemini-2.5-flash"),
             "system_prompt": settings.get("system_prompt", ""),
             "group_reply_mode": settings.get("group_reply_mode", "mention_only"),
+            **{f"ai_reactivation_{k}": v for k, v in ai_reactivation.read_config(settings).items()},
             "media_autodownload": media_policy.normalize(settings.get("media_autodownload")),
             "disk_limit_gb": _disk_limit_gb(),
             "disk_limit_locked": bool(os.environ.get("WHATSBOT_DISK_LIMIT_GB", "").strip()),
@@ -106,6 +107,11 @@ def register_routes(app, deps):
             "low_balance_enabled", "low_balance_threshold",
             "ai_engine_enabled",
             "media_autodownload", "disk_limit_gb",
+            # Religar a IA: só as chaves da regra; last_run é do servidor.
+            "ai_reactivation_enabled", "ai_reactivation_unit",
+            "ai_reactivation_value", "ai_reactivation_weekdays",
+            "ai_reactivation_time", "ai_reactivation_last_sender",
+            "ai_reactivation_include_groups_archived", "ai_reactivation_timezone",
             # Only the toggle is user-writable here. gowa_skipped_version has
             # its own endpoint and the other two are written by the server.
             "gowa_auto_check_enabled",
@@ -118,6 +124,10 @@ def register_routes(app, deps):
             if key == "media_autodownload":
                 # Never store junk: merge over the lean defaults.
                 value = media_policy.normalize(value)
+            elif key.startswith(ai_reactivation.KEY_PREFIX):
+                value = ai_reactivation.clean(key, value)
+                if value is ai_reactivation.INVALID:
+                    continue
             elif key == "disk_limit_gb":
                 if os.environ.get("WHATSBOT_DISK_LIMIT_GB", "").strip():
                     continue  # hosting owns the limit; the panel cannot override it

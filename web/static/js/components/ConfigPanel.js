@@ -20,6 +20,7 @@ const PANEL_TARGET_TABS = {
   'auto-reply': 'agent',
   'default-ai': 'agent',
   groups: 'agent',
+  'ai-reactivation': 'agent',
   'ai-behavior': 'agent',
   prompt: 'agent',
   behavior: 'agent',
@@ -92,6 +93,36 @@ const MEDIA_ROWS = [
   { id: 'document', label: 'Documentos', icon: '📄' },
 ];
 
+// Religar a IA automaticamente (server/ai_reactivation.py). Dias da semana: 0 = segunda.
+const REACTIVATION_UNITS = [
+  { id: 'minutes', label: 'Minutos sem mensagens' },
+  { id: 'hours', label: 'Horas sem mensagens' },
+  { id: 'days', label: 'Dias sem mensagens' },
+  { id: 'schedule', label: 'Dias da semana e horário' },
+];
+
+const REACTIVATION_OWNERS = [
+  { id: 'both', label: 'Cliente ou atendente (qualquer um)' },
+  { id: 'customer', label: 'Cliente' },
+  { id: 'attendant', label: 'Usuário/atendente' },
+];
+
+const WEEKDAYS = [
+  { id: 0, label: 'Seg', full: 'segunda-feira' },
+  { id: 1, label: 'Ter', full: 'terça-feira' },
+  { id: 2, label: 'Qua', full: 'quarta-feira' },
+  { id: 3, label: 'Qui', full: 'quinta-feira' },
+  { id: 4, label: 'Sex', full: 'sexta-feira' },
+  { id: 5, label: 'Sáb', full: 'sábado' },
+  { id: 6, label: 'Dom', full: 'domingo' },
+];
+
+const REACTIVATION_VALUE_HINT = {
+  minutes: 'minutos',
+  hours: 'horas',
+  days: 'dias',
+};
+
 const DEFAULT_AUTODOWNLOAD = {
   audio: { individual: true, group: true },
   image: { individual: false, group: false },
@@ -128,6 +159,13 @@ export function ConfigPanel({ config, saving, onSave, onNotify }) {
   const [markingAllRead, setMarkingAllRead] = useState(false);
   const [defaultAiEnabled, setDefaultAiEnabled] = useState(true);
   const [groupReplyMode, setGroupReplyMode] = useState('mention_only');
+  const [reactEnabled, setReactEnabled] = useState(false);
+  const [reactUnit, setReactUnit] = useState('hours');
+  const [reactValue, setReactValue] = useState(24);
+  const [reactWeekdays, setReactWeekdays] = useState([0, 1, 2, 3, 4]);
+  const [reactTime, setReactTime] = useState('08:00');
+  const [reactLastSender, setReactLastSender] = useState('both');
+  const [reactIncludeGroupsArchived, setReactIncludeGroupsArchived] = useState(false);
   const [mediaAutodownload, setMediaAutodownload] = useState(DEFAULT_AUTODOWNLOAD);
   const [testing, setTesting] = useState(false);
   const [webPassword, setWebPassword] = useState('');
@@ -186,6 +224,13 @@ export function ConfigPanel({ config, saving, onSave, onNotify }) {
       setMaxExecutions(config.max_executions ?? 200);
       setDefaultAiEnabled(config.default_ai_enabled ?? true);
       setGroupReplyMode(config.group_reply_mode ?? 'mention_only');
+      setReactEnabled(config.ai_reactivation_enabled ?? false);
+      setReactUnit(config.ai_reactivation_unit ?? 'hours');
+      setReactValue(config.ai_reactivation_value ?? 24);
+      setReactWeekdays(config.ai_reactivation_weekdays ?? [0, 1, 2, 3, 4]);
+      setReactTime(config.ai_reactivation_time ?? '08:00');
+      setReactLastSender(config.ai_reactivation_last_sender ?? 'both');
+      setReactIncludeGroupsArchived(config.ai_reactivation_include_groups_archived ?? false);
       setMediaAutodownload({ ...DEFAULT_AUTODOWNLOAD, ...(config.media_autodownload || {}) });
     }
   }, [config]);
@@ -306,7 +351,17 @@ export function ConfigPanel({ config, saving, onSave, onNotify }) {
     }
   }
 
+  function toggleWeekday(id) {
+    setReactWeekdays((current) => (
+      current.includes(id) ? current.filter((d) => d !== id) : [...current, id].sort()
+    ));
+  }
+
   async function handleSave() {
+    if (reactEnabled && reactUnit === 'schedule' && reactWeekdays.length === 0) {
+      onNotify('Escolha ao menos um dia da semana para religar a IA.');
+      return;
+    }
     const data = {
       model: model.trim() || 'deepseek/deepseek-v4.1-flash',
       improvement_model: improvementModel.trim(),
@@ -330,6 +385,15 @@ export function ConfigPanel({ config, saving, onSave, onNotify }) {
       max_executions: parseInt(maxExecutions, 10) || 200,
       default_ai_enabled: defaultAiEnabled,
       group_reply_mode: groupReplyMode,
+      ai_reactivation_enabled: reactEnabled,
+      ai_reactivation_unit: reactUnit,
+      ai_reactivation_value: parseInt(reactValue, 10) || 1,
+      ai_reactivation_weekdays: reactWeekdays,
+      ai_reactivation_time: reactTime || '08:00',
+      ai_reactivation_last_sender: reactLastSender,
+      ai_reactivation_include_groups_archived: reactIncludeGroupsArchived,
+      // The schedule is read in the zone of whoever saved it, not the server's.
+      ai_reactivation_timezone: Intl.DateTimeFormat().resolvedOptions().timeZone || '',
       media_autodownload: mediaAutodownload,
     };
     // Only include api_key if user typed a new one
@@ -420,6 +484,106 @@ export function ConfigPanel({ config, saving, onSave, onNotify }) {
           </select>
           <span class="text-xs text-wa-secondary">Vale apenas para grupos com a IA ativada. "Somente quando mencionado" exige um @menção ao bot; "Sempre" responde a qualquer mensagem do grupo.</span>
         </div>
+
+        <!-- Religar a IA automaticamente -->
+        <label id="ai-reactivation" class="flex items-center gap-3 text-sm font-semibold text-wa-text cursor-pointer p-3 rounded-lg border scroll-mt-4 ${reactEnabled ? 'bg-green-50 border-green-200' : 'bg-red-50 border-red-200'}">
+          <input
+            type="checkbox"
+            checked=${reactEnabled}
+            onChange=${(e) => setReactEnabled(e.target.checked)}
+            class="w-4 h-4 rounded border-wa-border accent-wa-teal"
+          />
+          Religar a IA automaticamente na conversa
+        </label>
+        <span class="text-xs text-wa-secondary -mt-2">Liga de novo a IA nas conversas em que ela foi desligada, seja por transferência para um atendente, desligada à mão ou desligada por padrão para novos contatos.</span>
+
+        ${reactEnabled ? html`
+          <div class="flex flex-col gap-4 p-3 bg-wa-panel rounded-lg border border-wa-border">
+            <div>
+              <label for="ai-reactivation-unit" class="block text-sm font-semibold text-wa-text mb-1">Quando religar</label>
+              <select
+                id="ai-reactivation-unit"
+                value=${reactUnit}
+                onChange=${(e) => setReactUnit(e.target.value)}
+                class="w-full bg-wa-bg text-wa-text px-3 py-2 rounded-lg text-sm border border-wa-border focus:border-wa-teal focus:outline-none"
+              >
+                ${REACTIVATION_UNITS.map((u) => html`<option value=${u.id}>${u.label}</option>`)}
+              </select>
+            </div>
+
+            ${reactUnit === 'schedule' ? html`
+              <div class="flex flex-col gap-3">
+                <div>
+                  <span class="block text-xs font-medium text-wa-text mb-1">Dias da semana</span>
+                  <div class="flex flex-wrap gap-2">
+                    ${WEEKDAYS.map((d) => html`
+                      <button
+                        type="button"
+                        aria-pressed=${reactWeekdays.includes(d.id)}
+                        title=${d.full}
+                        onClick=${() => toggleWeekday(d.id)}
+                        class="px-3 py-1.5 rounded-lg text-xs font-semibold border transition-colors ${reactWeekdays.includes(d.id)
+                          ? 'bg-wa-teal text-white border-wa-teal'
+                          : 'bg-wa-bg text-wa-secondary border-wa-border hover:bg-wa-hover'}"
+                      >${d.label}</button>
+                    `)}
+                  </div>
+                </div>
+                <div>
+                  <label for="ai-reactivation-time" class="block text-xs font-medium text-wa-text mb-1">Horário em que a IA volta a ser ligada</label>
+                  <input
+                    id="ai-reactivation-time"
+                    type="time"
+                    value=${reactTime}
+                    onInput=${(e) => setReactTime(e.target.value)}
+                    class="w-32 bg-wa-bg text-wa-text px-3 py-1.5 rounded-lg text-sm border border-wa-border focus:border-wa-teal focus:outline-none"
+                  />
+                </div>
+                <span class="text-xs text-wa-secondary">Nos dias marcados, neste horário (no fuso do seu navegador), a IA é religada nas conversas desligadas.</span>
+              </div>
+            ` : html`
+              <div>
+                <label for="ai-reactivation-value" class="block text-xs font-medium text-wa-text mb-1">Tempo sem mensagens (${REACTIVATION_VALUE_HINT[reactUnit]})</label>
+                <input
+                  id="ai-reactivation-value"
+                  type="number"
+                  min="1"
+                  step="1"
+                  value=${reactValue}
+                  onInput=${(e) => setReactValue(e.target.value)}
+                  class="w-32 bg-wa-bg text-wa-text px-3 py-1.5 rounded-lg text-sm border border-wa-border focus:border-wa-teal focus:outline-none"
+                />
+                <span class="block text-xs text-wa-secondary mt-1">Conta a partir da última mensagem do cliente ou do atendente. As respostas da própria IA não contam.</span>
+              </div>
+            `}
+
+            <div>
+              <label for="ai-reactivation-sender" class="block text-xs font-medium text-wa-text mb-1">Dono da última mensagem</label>
+              <select
+                id="ai-reactivation-sender"
+                value=${reactLastSender}
+                onChange=${(e) => setReactLastSender(e.target.value)}
+                class="w-full bg-wa-bg text-wa-text px-3 py-2 rounded-lg text-sm border border-wa-border focus:border-wa-teal focus:outline-none"
+              >
+                ${REACTIVATION_OWNERS.map((o) => html`<option value=${o.id}>${o.label}</option>`)}
+              </select>
+              <span class="block text-xs text-wa-secondary mt-1">Só religa as conversas cuja última mensagem foi enviada por quem você escolher.</span>
+            </div>
+
+            <label id="ai-reactivation-groups" class="flex items-start gap-2 text-sm font-semibold text-wa-text cursor-pointer scroll-mt-4">
+              <input
+                type="checkbox"
+                checked=${reactIncludeGroupsArchived}
+                onChange=${(e) => setReactIncludeGroupsArchived(e.target.checked)}
+                class="w-4 h-4 mt-0.5 rounded border-wa-border accent-wa-teal"
+              />
+              <span class="flex flex-col">
+                Religar IA em grupos e mensagens arquivadas
+                <span class="text-xs font-normal text-wa-secondary">Desmarcado, grupos e conversas arquivadas ficam como estão. Em grupos, a resposta continua seguindo a opção "Resposta da IA em grupos".</span>
+              </span>
+            </label>
+          </div>
+        ` : null}
       <//>
 
       <!-- Section: API e Modelos -->
