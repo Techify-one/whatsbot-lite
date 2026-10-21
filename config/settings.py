@@ -177,6 +177,10 @@ DEFAULT_CONFIG = {
     # horário e avaliação são escritos pelo servidor para sobreviver a restart.
     "gowa_auto_check_enabled": True,
     "gowa_skipped_version": "",
+    # Versão do GOWA recomendada pela release do WhatsBot-Lite (arquivo
+    # GOWA_VERSION) que a pessoa respondeu "Agora não". Chave própria: não é
+    # a ``gowa_skipped_version``, que trata da última release do GitHub.
+    "gowa_recommended_skipped_version": "",
     "gowa_latest_version": "",
     "gowa_last_check_at": 0.0,
     # Cached structured verdict for the installed→latest release interval.

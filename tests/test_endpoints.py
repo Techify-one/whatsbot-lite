@@ -1031,7 +1031,10 @@ from gowa import updater as _gowa_updater  # noqa: E402
 _gowa_fake_root = Path(tempfile.mkdtemp(prefix="whatsbot_test_gowa_"))
 (_gowa_fake_root / "bin").mkdir()
 (_gowa_fake_root / "storages").mkdir()
-(_gowa_fake_root / "GOWA_VERSION").write_text("8.8.0\n")
+# GOWA_VERSION = recommended by the release; the installed version is the file
+# next to the binary (they differ after a self-update, which preserves bin/).
+(_gowa_fake_root / "GOWA_VERSION").write_text("9.6.0\n")
+(_gowa_fake_root / "bin" / (_gowa_binary.binary_name() + ".version")).write_text("8.8.0\n")
 _fake_binary = _gowa_fake_root / "bin" / _gowa_binary.binary_name()
 _fake_binary.write_bytes(b"#!/bin/sh\nexit 0\n")
 _fake_binary.chmod(0o755)
@@ -1071,6 +1074,82 @@ _gv = r.json().get("data", {})
 check("GET /gowa/version -> installed_version", bool(_gv.get("installed_version")))
 check("GET /gowa/version -> source", _gv.get("source") in ("bundled", "managed", "env"))
 check("GET /gowa/version -> supported_range", _gv.get("supported_range") == _gowa_updater.GOWA_SUPPORTED_RANGE)
+check("GET /gowa/version -> instalada vem do arquivo ao lado do binário (8.8.0)",
+      _gv.get("installed_version") == "8.8.0", str(_gv.get("installed_version")))
+check("GET /gowa/version -> recommended_version (GOWA_VERSION)",
+      _gv.get("recommended_version") == "9.6.0")
+check("GET /gowa/version -> installed_version_known", _gv.get("installed_version_known") is True)
+check("GET /gowa/version -> recommended_update_available",
+      _gv.get("recommended_update_available") is True)
+check("GET /gowa/version -> recommended_supported", _gv.get("recommended_supported") is True)
+check("GET /gowa/version -> recommended_skipped inicia falso",
+      _gv.get("recommended_skipped") is False)
+
+# The recommendation must come from local files only: break GitHub and the
+# release analyzer and the route has to answer the same, instantly.
+def _boom(*_a, **_k):
+    raise AssertionError("a rota /gowa/version não pode usar rede nem o analisador")
+
+_saved_net = (_gowa_updater.fetch_latest_release, _gowa_updater.fetch_release_interval,
+              _gowa_updater.fetch_compare_commits, _gowa_updater.fetch_whatsmeow_commits,
+              _gowa_release_analyzer._call_llm, _gowa_updater.urllib.request.urlopen)
+_gowa_updater.fetch_latest_release = _boom
+_gowa_updater.fetch_release_interval = _boom
+_gowa_updater.fetch_compare_commits = _boom
+_gowa_updater.fetch_whatsmeow_commits = _boom
+_gowa_release_analyzer._call_llm = _boom
+_gowa_updater.urllib.request.urlopen = _boom
+try:
+    _t0 = time.monotonic()
+    r = client.get("/api/gowa/version")
+    _elapsed = time.monotonic() - _t0
+finally:
+    (_gowa_updater.fetch_latest_release, _gowa_updater.fetch_release_interval,
+     _gowa_updater.fetch_compare_commits, _gowa_updater.fetch_whatsmeow_commits,
+     _gowa_release_analyzer._call_llm, _gowa_updater.urllib.request.urlopen) = _saved_net
+check("GET /gowa/version sem GitHub e sem LLM -> 200", r.status_code == 200, r.text[:200])
+check("GET /gowa/version sem GitHub e sem LLM -> recomendada disponível",
+      r.json().get("data", {}).get("recommended_update_available") is True)
+check("GET /gowa/version responde rápido (sem esperar rede/LLM)", _elapsed < 2.0, f"{_elapsed:.2f}s")
+
+# "Agora não": persisted in the database, and it only mutes THAT version.
+r = client.post("/api/gowa/skip-recommended", json={"version": ""})
+check("POST /gowa/skip-recommended (vazio) usa a recomendada -> 200", r.status_code == 200)
+check("POST /gowa/skip-recommended -> persistido no banco",
+      config_repo.get("gowa_recommended_skipped_version") == "9.6.0")
+_gv = client.get("/api/gowa/version").json()["data"]
+check("GET /gowa/version -> recommended_skipped após 'Agora não'", _gv.get("recommended_skipped") is True)
+check("GET /gowa/version -> adiar não esconde a atualização",
+      _gv.get("recommended_update_available") is True)
+check("'Agora não' não toca em gowa_skipped_version (GitHub)",
+      not config_repo.get("gowa_skipped_version", ""))
+
+(_gowa_fake_root / "GOWA_VERSION").write_text("9.7.0\n")
+_gv = client.get("/api/gowa/version").json()["data"]
+check("GOWA_VERSION muda -> volta a perguntar",
+      _gv.get("recommended_version") == "9.7.0" and _gv.get("recommended_skipped") is False)
+(_gowa_fake_root / "GOWA_VERSION").write_text("9.6.0\n")
+
+r = client.post("/api/gowa/skip-recommended", json={"version": "../../etc/passwd"})
+check("POST /gowa/skip-recommended (versão inválida) -> 400", r.status_code == 400)
+client.post("/api/gowa/skip-recommended", json={"version": "9.6.0"})
+client.put("/api/config", json={"gowa_recommended_skipped_version": "0.0.1"})
+check("gowa_recommended_skipped_version não é gravável por PUT /config",
+      config_repo.get("gowa_recommended_skipped_version") == "9.6.0")
+
+# Binary nobody can identify: the panel says so instead of inventing a number.
+_sidecar = _gowa_fake_root / "bin" / (_gowa_binary.binary_name() + ".version")
+_sidecar.unlink()
+_gv = client.get("/api/gowa/version").json()["data"]
+check("binário sem identificação -> installed_version vazia", _gv.get("installed_version") == "")
+check("binário sem identificação -> installed_version_known falso",
+      _gv.get("installed_version_known") is False)
+check("binário sem identificação -> recomendação disponível",
+      _gv.get("recommended_update_available") is True)
+_gp = client.get("/api/gowa/proxy").json()["data"]
+check("proxy com versão desconhecida -> supported falso", _gp.get("supported") is False)
+check("proxy expõe installed_version_known", _gp.get("installed_version_known") is False)
+_sidecar.write_text("8.8.0\n")
 
 r = client.get("/api/gowa/update/check")
 check("GET /gowa/update/check -> 200", r.status_code == 200)

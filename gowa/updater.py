@@ -416,13 +416,48 @@ def fetch_whatsmeow_commits(current: str, latest: str,
         return list((cached or {}).get("data") or [])
 
 
+def recommended_info(installed: str, source: str, settings) -> dict:
+    """Local-only "this release recommends a newer GOWA than the installed one".
+
+    Reads files and the config table only: no GitHub, no LLM. That is what lets
+    the panel open its modal right after boot instead of waiting for
+    ``check()``, which can block for minutes on the release assessment.
+
+    ``installed`` unknown (``''``) compares as older than everything, so a
+    binary nobody could identify still gets the recommendation.
+    """
+    recommended = gowa_binary.read_recommended_version()
+    skipped = str(
+        (settings.get("gowa_recommended_skipped_version", "") if settings else "") or ""
+    ).strip().lstrip("vV")
+    # WHATSBOT_GOWA_BINARY pins a binary on purpose (dev/CI); installing into
+    # storages/bin would not change what runs, so never recommend over it.
+    available = (
+        bool(recommended)
+        and source != "env"
+        and gowa_binary.version_cmp(recommended, installed) > 0
+    )
+    return {
+        "recommended_version": recommended,
+        "installed_version_known": gowa_binary.is_known_version(installed),
+        "recommended_update_available": available,
+        "recommended_supported": bool(recommended) and is_supported(recommended),
+        "recommended_skipped": bool(recommended) and skipped == recommended,
+        "recommended_release_url": (
+            GOWA_RELEASE_PAGE.format(version=recommended) if recommended else ""
+        ),
+    }
+
+
 def check(settings, force: bool = False) -> dict:
     """Snapshot of "what is installed vs. what is available"."""
     _, source, installed = gowa_binary.resolve_binary()
+    installed_known = gowa_binary.is_known_version(installed)
     combo = detect_platform()
 
     result = {
         "installed_version": installed,
+        "installed_version_known": installed_known,
         "source": source,
         "bundled_version": gowa_binary.read_bundled_version(),
         "supported_range": GOWA_SUPPORTED_RANGE,
@@ -472,7 +507,10 @@ def check(settings, force: bool = False) -> dict:
         settings["gowa_latest_version"] = version
         settings["gowa_last_check_at"] = result["checked_at"]
 
-    if result["update_available"]:
+    # The assessment needs a real (installed, latest] interval. With an
+    # unidentified binary there is none: the interval would span every release
+    # ever published and the compare endpoints would be fed an empty tag.
+    if result["update_available"] and installed_known:
         try:
             releases = fetch_release_interval(installed, version, force=force)
         except GowaUpdateError as exc:

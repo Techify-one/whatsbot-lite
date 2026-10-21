@@ -471,6 +471,11 @@ export async function skipGowaVersion(version) {
   return request('POST', '/api/gowa/skip-version', { version });
 }
 
+// "Agora não" on the modal for the version the WhatsBot-Lite release recommends.
+export async function skipRecommendedGowa(version) {
+  return request('POST', '/api/gowa/skip-recommended', { version });
+}
+
 // ── Auth ──────────────────────────────────────────────────────────
 
 export async function login(password) {

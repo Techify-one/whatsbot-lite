@@ -15,8 +15,13 @@ const PHASE_LABELS = {
 };
 
 export function GowaUpdateModal({
+  // 'recommended': the WhatsBot-Lite release recommends this GOWA (decided
+  // locally, never obligatory). 'compat': the release analyzer found a
+  // WhatsApp compatibility reason in a newer upstream GOWA.
+  mode = 'compat',
   latestVersion,
   installedVersion,
+  installedKnown = true,
   supported = true,
   releaseUrl,
   riskLevel = 'medium',
@@ -29,6 +34,9 @@ export function GowaUpdateModal({
   onSkip,
 }) {
   const [confirmUnsupported, setConfirmUnsupported] = useState(false);
+  const recommended = mode === 'recommended';
+  // An empty/unknown installed version is shown as such, never as "?" or a guess.
+  const versionUnknown = !installedKnown || !installedVersion;
 
   const phase = progress?.phase || '';
   const phaseLabel = PHASE_LABELS[phase] || 'Atualizando...';
@@ -71,15 +79,45 @@ export function GowaUpdateModal({
             <svg xmlns="http://www.w3.org/2000/svg" width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" class="text-wa-teal" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21 12a9 9 0 0 1-9 9 9 9 0 0 1-6.36-2.64L3 21"/><path d="M3 12a9 9 0 0 1 9-9 9 9 0 0 1 6.36 2.64L21 3"/><polyline points="21 3 21 9 15 9"/><polyline points="3 21 3 15 9 15"/></svg>
           </div>
           <h2 class="text-base font-semibold text-wa-text">
-            Atualização recomendada do GOWA
+            ${recommended ? 'Motor do WhatsApp recomendado' : 'Atualização recomendada do GOWA'}
           </h2>
         </div>
 
+        ${recommended ? html`
+          <p class="text-sm text-wa-text mb-3 leading-relaxed">
+            O WhatsBot-Lite foi atualizado e recomenda a versão
+            <span class="font-mono font-semibold text-wa-teal">${latestVersion}</span>
+            do motor do WhatsApp (GOWA).
+          </p>
+        ` : null}
+
         <p class="text-sm text-wa-secondary mb-4">
-          Instalada: <span class="font-mono font-semibold text-wa-text">${installedVersion || '?'}</span>
+          Instalada:
+          ${versionUnknown ? html`
+            <span class="font-semibold text-wa-text">não identificada</span>
+          ` : html`
+            <span class="font-mono font-semibold text-wa-text">${installedVersion}</span>
+          `}
           <span class="mx-1.5">→</span>
-          Disponível: <span class="font-mono font-semibold text-wa-teal">${latestVersion || '?'}</span>
+          ${recommended ? 'Recomendada' : 'Disponível'}: <span class="font-mono font-semibold text-wa-teal">${latestVersion || '?'}</span>
         </p>
+
+        ${recommended && versionUnknown ? html`
+          <div class="mb-4 p-3 rounded-lg bg-amber-50 border border-amber-200 text-amber-800 text-xs leading-relaxed">
+            Não consegui identificar a versão instalada. Se você colocou um
+            arquivo mais novo à mão, instalar a recomendada pode trocá-lo por uma
+            versão mais antiga. Se algo der errado, use o botão Reverter em
+            Painel → Sistema → GOWA.
+          </div>
+        ` : null}
+
+        ${recommended ? html`
+          <p class="text-xs text-wa-secondary mb-4 leading-relaxed">
+            É uma recomendação, não uma obrigação: você pode continuar com a versão
+            atual. Trocar de versão pode mudar o comportamento do WhatsApp, e dá para
+            voltar à anterior pelo botão Reverter.
+          </p>
+        ` : null}
 
         ${reason ? html`
           <div class="mb-4 p-3 rounded-lg bg-blue-50 border border-blue-200 text-blue-900 text-xs leading-relaxed">
@@ -139,12 +177,14 @@ export function GowaUpdateModal({
           </div>
 
           <div class="flex items-center justify-between mt-4 text-xs">
-            <button
-              onClick=${() => onSkip(latestVersion)}
-              class="text-wa-secondary hover:text-wa-text transition-colors underline"
-            >
-              Pular esta versão
-            </button>
+            ${recommended ? html`<span></span>` : html`
+              <button
+                onClick=${() => onSkip(latestVersion)}
+                class="text-wa-secondary hover:text-wa-text transition-colors underline"
+              >
+                Pular esta versão
+              </button>
+            `}
             ${releaseUrl ? html`
               <a
                 href=${releaseUrl}

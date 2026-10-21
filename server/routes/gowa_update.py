@@ -51,6 +51,7 @@ def register_routes(app, deps):
         path, source, installed = gowa_binary.resolve_binary()
         combo = gowa_updater.detect_platform()
         return {
+            # "" when the binary could not be identified (never a guess).
             "installed_version": installed,
             "source": source,
             "bundled_version": gowa_binary.read_bundled_version(),
@@ -62,6 +63,7 @@ def register_routes(app, deps):
             "busy": gowa_updater.is_busy(),
             "binary_path": str(path),
             "platform_supported": combo is not None,
+            **gowa_updater.recommended_info(installed, source, settings),
         }
 
     @app.get("/api/gowa/version")
@@ -160,6 +162,7 @@ def register_routes(app, deps):
             "supported": gowa_proxy.supports_proxy(installed),
             "min_version": gowa_proxy.MIN_GOWA_VERSION,
             "installed_version": installed,
+            "installed_version_known": gowa_binary.is_known_version(installed),
             "env_locked": bool(os.environ.get(gowa_proxy.ENV_OVERRIDE, "").strip()),
             "running": gowa_manager.is_running,
             "error": error,
@@ -237,4 +240,22 @@ def register_routes(app, deps):
             return _err("Informe a versão a pular.")
         settings["gowa_skipped_version"] = version
         logger.info("GOWA version %s skipped by the user.", version)
+        return _ok({"skipped_version": version})
+
+    @app.post("/api/gowa/skip-recommended")
+    async def gowa_skip_recommended(body: dict | None = None):
+        """"Agora não" on the modal for the version this release recommends.
+
+        Stored in the database (not localStorage) so it holds across browsers
+        and restarts; a release that recommends a different number asks again.
+        Kept apart from ``gowa_skipped_version``, which is about GitHub's latest.
+        """
+        body = body or {}
+        version = str(body.get("version") or "").strip().lstrip("vV")
+        if not version:
+            version = gowa_binary.read_recommended_version()
+        if not gowa_updater._VERSION_RE.match(version):
+            return _err("Informe a versão recomendada a adiar.")
+        settings["gowa_recommended_skipped_version"] = version
+        logger.info("Recommended GOWA version %s postponed by the user.", version)
         return _ok({"skipped_version": version})

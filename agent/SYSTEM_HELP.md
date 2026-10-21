@@ -321,7 +321,9 @@ Em **Painel → Sistema → Avançado → Atualizar WhatsBot-Lite**, altere **Av
 
 ### Configurar ou atualizar o motor do WhatsApp
 
-Em **Painel → Sistema → GOWA**, consulte a versão, atualização e opções de conexão do motor responsável pelo WhatsApp.
+Em **Painel → Sistema → GOWA**, consulte a versão, atualização e opções de conexão do motor responsável pelo WhatsApp. A versão instalada também aparece ao lado do status de conexão no topo do Painel. Se o WhatsBot-Lite não conseguir descobrir qual versão está instalada, ele mostra **não identificada** em vez de um número.
+
+Depois que você atualiza o WhatsBot-Lite, ele pode abrir sozinho um aviso **Motor do WhatsApp recomendado** quando a nova versão sugere um motor mais novo que o instalado. Nunca é obrigatório: clique em **Atualizar agora** para instalar (a instalação confere a integridade e volta à versão anterior sozinha se algo falhar) ou em **Agora não** para continuar como está. O aviso não volta para a mesma versão, só quando uma atualização do WhatsBot-Lite recomendar outra. Se você escolheu **Agora não** e mudou de ideia, use **Instalar a recomendada** na mesma tela do GOWA. Para voltar à versão anterior, use o botão **Reverter** ali também.
 
 [Abrir versão e atualização do GOWA]({{base_url}}/painel?aba=sistema#gowa-version)
 

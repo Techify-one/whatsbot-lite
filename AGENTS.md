@@ -9,8 +9,9 @@ Bot de WhatsApp com IA para usuários finais, distribuído como EXE Windows.
 - **SQLite** — banco default (WAL mode, driver `sqlite3` da stdlib)
 - **PostgreSQL** — backend opcional via `psycopg[binary]`, configurável pela tela Settings → Banco
 - **GOWA** (go-whatsapp-web-multidevice) — bridge WhatsApp via REST, roda como subprocess. A versão
-  que acompanha o app fica no arquivo `GOWA_VERSION` na raiz (fonte única lida pelo Dockerfile, pelos
-  launchers e por `gowa/binary.py`). O usuário pode atualizar o binário pelo painel; ver
+  **recomendada** pela release fica no arquivo `GOWA_VERSION` na raiz (lida pelo Dockerfile, pelos
+  launchers e por `gowa/binary.py`); a versão **instalada** é descoberta por `gowa/binary.py` e nunca
+  vem desse arquivo. O usuário pode atualizar o binário pelo painel; ver
   [Atualização do GOWA](#atualização-do-gowa)
 - **Proxy LLM da Techify** (`https://llm.techify.one/api/v1`) — provider de LLM, API **compatível com OpenRouter/OpenAI**. Substituiu o OpenRouter direto: a chave é provisionada pelo wizard de 1ª execução e o crédito/recarga é gerido pela Techify. O base URL é configurável via env `LLM_API_BASE_URL`. A chave continua sendo persistida na config key `openrouter_api_key` (nome legado mantido por compatibilidade)
 - **AGNO** (`agno` 2.x) — framework de agentes usado como **motor de LLM** do agente. O loop de raciocínio + tool calling roda via `agno.agent.Agent`, apontado ao proxy Techify pelo model `OpenAILike`. Encapsulado em [agent/agno_engine.py](agent/agno_engine.py); o `AgentHandler` delega a ele preservando todos os hooks de plugin (filters/events), usage e execution tracking. Transcrição de áudio/descrição de imagem continuam em chamadas diretas ao cliente OpenAI (não são agênticas)
@@ -64,7 +65,7 @@ web/static/vendor/   → libs JS vendorizadas (preact, htm, tailwind)
 web/static/css/tailwind.css → CSS utilitário pré-gerado do core (não editar à mão; gerado por tools/css)
 web/static/tailwind-theme.json → tema do Tailwind (fonte única para o build e para o runtime dos plugins)
 tools/css/           → build do CSS (Node só em dev; usuários finais não precisam)
-GOWA_VERSION         → versão do GOWA que acompanha esta release (fonte única)
+GOWA_VERSION         → versão do GOWA que esta release RECOMENDA (não diz o que está instalado)
 gowa/binary.py       → resolve qual binário rodar (bin/ bundled vs storages/bin/ gerenciado) + metadados
 gowa/updater.py      → download/verificação/swap/rollback do binário GOWA
 gowa/proxy.py        → proxy de saída da conexão do WhatsApp (validação, URL, teste de conexão)
@@ -74,6 +75,7 @@ server/media_policy.py → política de download automático de mídia (matriz t
 server/file_manager.py → listagem e remoção segura de statics/media e statics/operator (allowlist, ids opacos)
 server/routes/files.py → endpoints /api/files/* da tela Arquivos
 bin/gowa.exe         → binário GOWA pré-compilado do Windows (não editar; atualizações vão pra storages/bin/)
+bin/gowa.exe.version → versão do bin/gowa.exe, rastreada no git e trocada junto com o exe (ver "Versão instalada")
 storages/bin/        → binário GOWA atualizado pelo painel (writable, persiste em Docker/Coolify)
 WHATSBOT_VERSION     → versão + histórico de changelog do WhatsBot-Lite que acompanha esta release (fonte única, bumpado pelo /release-up)
 server/routes/update.py → detecção, preferências e instalação de updates do WhatsBot-Lite
@@ -333,24 +335,73 @@ no topo do `/painel`.
 
 | Diretório | Papel | Por quê |
 |---|---|---|
-| `bin/<nome>` | **bundled**: o que a imagem, o launcher ou o repo entregou | No Docker é symlink pra camada da imagem (some no redeploy); no Windows `bin/gowa.exe` é tracked no git (escrever ali sujaria a árvore e conflitaria no `git pull`) |
+| `bin/<nome>` | **bundled**: o que a imagem, o launcher ou o repo entregou | No Docker é symlink pra camada da imagem (some no redeploy); no Windows `bin/gowa.exe` é tracked no git (escrever ali sujaria a árvore e conflitaria no `git pull`). A versão dele vem de `identify_bundled_version()`, ver "Dois conceitos" |
 | `storages/bin/<nome>` | **managed**: instalado pelo painel | `storages/` é gitignored, é volume nomeado no Docker e é preservado pelo self-update do WhatsBot-Lite |
 
 `gowa/binary.py:resolve_binary()` escolhe entre os dois **comparando versões**, não preferindo cegamente
 o gerenciado: uma imagem reconstruída com GOWA mais novo ganha de um override velho em `storages/bin`.
 A ordem é `WHATSBOT_GOWA_BINARY` (env, escape hatch de dev) → managed (se `>=` bundled) → bundled.
+Um bundled de versão desconhecida compara como `(0, 0, 0)`, então um managed com versão válida sempre
+vence (sem isso o binário atualizado pelo painel seria descartado).
 
-### Fonte única da versão
+### Dois conceitos: versão recomendada x versão instalada
 
-O arquivo `GOWA_VERSION` na raiz (uma linha, ex. `8.8.0`) é lido pelo `Dockerfile`, pelo
-`linux_start.sh`, pelo `macos_start.command` e por `gowa/binary.py`. Os launchers e o Dockerfile gravam
-`bin/.gowa_stamp` (gitignored) com a versão efetivamente baixada, e o stamp tem precedência sobre o
-`GOWA_VERSION` na hora de dizer o que está em `bin/`. Como a guarda de download compara stamp vs.
-`GOWA_VERSION`, bumpar o arquivo faz as máquinas de dev re-baixarem no próximo start.
+| Conceito | Fonte | Nunca usar para |
+|---|---|---|
+| **Recomendada** | arquivo `GOWA_VERSION` na raiz (muda a cada release; o self-update o sobrescreve) | saber o que está instalado |
+| **Instalada** | `gowa/binary.py:identify_bundled_version()` (abaixo) para `bin/`; `gowa_meta.json` para `storages/bin/` | decidir o que recomendar |
 
-**Regra de release**: ao bumpar `GOWA_VERSION`, commitar o `bin/gowa.exe` correspondente **no mesmo
-commit**. O Windows depende do exe tracked, e a lógica "bundled mais novo ganha" depende dos dois em
-sincronia.
+O self-update **preserva `bin/`** e **sobrescreve `GOWA_VERSION`**, então depois dele `GOWA_VERSION`
+descreve o código novo e não o binário. Por isso `identify_bundled_version()` **nunca** cai em
+`GOWA_VERSION` (nem num baseline fixo). A ordem, primeiro que existir vence:
+
+1. `bin/.gowa_stamp` (gitignored): gravado por máquina por `linux_start.sh`, `macos_start.command` e pelo
+   Dockerfile. O `windows_start.bat` não grava.
+2. **sha256 do binário** contra `KNOWN_BINARY_HASHES` (em `gowa/binary.py`): cobre quem atualizou de
+   uma release antiga e nunca recebeu o arquivo do item 3, porque o self-update não entrega arquivos novos
+   dentro de `bin/`. É objetivo, então ganha de um `.version` velho que sobrou de uma troca manual do exe.
+   O hash é cacheado por `(caminho, tamanho, mtime_ns)`: `resolve_binary()` roda o tempo todo e o exe tem
+   ~30 MB.
+3. `bin/<binário>.version` (rastreado no git; no Windows `bin/gowa.exe.version`, uma linha). Não reaproveitar
+   o nome `.gowa_stamp`, que está no `.gitignore` de propósito.
+4. **Desconhecida** (`''`). O painel mostra "não identificada", `supports_proxy('')` é falso, `check()`
+   não monta intervalo de releases nem chama o analisador, e a recomendação continua valendo.
+
+**Regra de release** — ao trocar o `bin/gowa.exe`, no **mesmo commit**: (a) atualizar `bin/gowa.exe.version`;
+(b) acrescentar a linha do novo sha256 em `KNOWN_BINARY_HASHES` (conferido contra o zip oficial
+`whatsapp_<v>_windows_amd64.zip`, membro `windows-amd64.exe`). `tests/test_gowa_update.py` quebra se o exe,
+a tabela e o `.version` divergirem. Bumpar `GOWA_VERSION` **sem** trocar o exe é permitido: o modal de
+versão recomendada baixa o binário (o exe novo no repositório é recomendado, não obrigatório). Os
+launchers de Linux/macOS e o Dockerfile continuam baixando o que o `GOWA_VERSION` pede e gravando o stamp.
+
+### Aviso de versão recomendada (modal depois de atualizar o WhatsBot-Lite)
+
+`GET /api/gowa/version` devolve, **só com arquivos e banco locais (sem GitHub, sem LLM)**,
+`recommended_version`, `installed_version_known`, `recommended_update_available` (`recomendada > instalada`,
+desconhecida conta como menor), `recommended_supported`, `recommended_skipped` e `recommended_release_url`
+(`gowa/updater.py:recommended_info`). Nunca pendure isso em `GET /api/gowa/update/check`: essa rota faz
+chamadas ao GitHub e espera o analisador de releases chamar o LLM (pode levar ~3 min com a rede ruim).
+
+O [app.js](web/static/js/app.js) consulta `/api/gowa/version` ao abrir a página **e a cada conexão do
+WebSocket**: o self-update reinicia o servidor sem recarregar a página, e essa reconexão é o momento em que
+o novo `GOWA_VERSION` aparece. A decisão pura vive em [gowaPrompt.js](web/static/js/utils/gowaPrompt.js)
+(testada em `tests/gowa-prompt.test.cjs`: `node --test tests/gowa-prompt.test.cjs`).
+
+- **Nunca obrigatório.** O `GowaUpdateModal` tem `mode='recommended'` (texto próprio, versão não identificada
+  dita como tal) e **Agora não**. O "Atualizar agora" chama `installGowaUpdate(recommended_version)`, a versão
+  **validada**, não a última do GitHub; usa o mesmo `install()` (checksum, smoke test, troca atômica,
+  rollback e `_UPDATE_LOCK`/409).
+- **"Agora não"** vai para o banco em `gowa_recommended_skipped_version` por
+  `POST /api/gowa/skip-recommended`, não para `localStorage`; volta a perguntar quando `GOWA_VERSION` mudar
+  de número. **Não** confundir com `gowa_skipped_version` (última do GitHub, usada pelo analisador). A chave
+  não está no `allowed_keys` do `PUT /api/config`.
+- **Um modal por vez.** Um modal aberto nunca é trocado por outro de tipo diferente (`nextPrompt`); o do
+  analisador também não reabre uma versão que a pessoa acabou de adiar. O gatilho **não** depende de
+  `whatsapp_update_recommended`.
+- Não abre quando a recomendada está fora de `GOWA_SUPPORTED_RANGE`, quando não há binário para a
+  plataforma (`platform_supported`), quando já há um update rodando, ou com `WHATSBOT_GOWA_BINARY` (env).
+- Na tela do GOWA ([GowaSettings.js](web/static/js/components/GowaSettings.js)) aparece "Recomendada nesta
+  versão" e o botão **Instalar a recomendada** quando ela difere da última do GitHub.
 
 ### Faixa homologada
 
@@ -386,6 +437,7 @@ Ao homologar uma versão maior, bumpe a constante junto com o `GOWA_VERSION`.
 |---|---|---|
 | `gowa_auto_check_enabled` | `True` | Liga a verificação diária. Override por env `WHATSBOT_GOWA_AUTO_CHECK` |
 | `gowa_skipped_version` | `""` | Versão que o usuário mandou pular (escrita por `/api/gowa/skip-version`) |
+| `gowa_recommended_skipped_version` | `""` | Versão recomendada pela release que a pessoa adiou com "Agora não" (escrita por `/api/gowa/skip-recommended`) |
 | `gowa_latest_version` | `""` | Última versão vista (escrita pelo servidor) |
 | `gowa_last_check_at` | `0.0` | Timestamp da última checagem (escrita pelo servidor) |
 
@@ -668,11 +720,12 @@ Nomes não vêm do GOWA (`DisplayName` volta vazio): são resolvidos de contatos
 | POST | `/api/update/popup-seen` | Limpa o marcador legado do popup pós-update; mantido para compatibilidade |
 | POST | `/api/update/skip-version` | `{version}` — oculta o aviso somente para essa release; a próxima volta a aparecer |
 | POST | `/api/update` | Baixa o `.zip` da **tag** da última release (não o `main`), sobrescreve os arquivos preservando `storages/statics/logs/venv/.git/bin` e `.env`, e reinicia o processo automaticamente |
-| GET | `/api/gowa/version` | Versão do GOWA em uso, origem (`bundled`/`managed`/`env`), se há backup pra reverter |
+| GET | `/api/gowa/version` | Versão do GOWA em uso (`''` = não identificada), origem (`bundled`/`managed`/`env`), se há backup pra reverter e, só com dados locais, a versão recomendada pela release (`recommended_*`, `installed_version_known`) |
 | GET | `/api/gowa/update/check?force=1` | Consulta a última release no GitHub (cache 1h) + se está na faixa homologada |
 | POST | `/api/gowa/update` | Baixa, verifica o SHA-256, troca o binário e reinicia. Body `{version?, force_unsupported?}`. 409 se já houver update rodando |
 | POST | `/api/gowa/rollback` | Restaura a versão anterior do GOWA |
 | POST | `/api/gowa/skip-version` | `{version}` — não avisa mais nessa versão específica |
+| POST | `/api/gowa/skip-recommended` | `{version?}` — "Agora não" do modal da versão recomendada pela release (sem `version`, usa a de `GOWA_VERSION`); grava `gowa_recommended_skipped_version` |
 | GET | `/api/gowa/proxy` | Config do proxy de saída (senha mascarada) + se o GOWA instalado suporta |
 | PUT | `/api/gowa/proxy` | Salva o proxy e reinicia o GOWA quando a URL efetiva muda |
 | POST | `/api/gowa/proxy/test` | Testa o proxy de verdade (handshake SOCKS5 ou HTTP CONNECT até `web.whatsapp.com:443`) |
@@ -1014,6 +1067,7 @@ source venv/Scripts/activate
 python tests/test_endpoints.py
 python tests/test_gowa_update.py   # updater do GOWA (offline, release falsa via file://)
 python tests/test_gowa_proxy.py    # proxy do GOWA (offline, proxies SOCKS5/HTTP falsos em socket)
+node --test tests/gowa-prompt.test.cjs  # decisão dos modais de GOWA no frontend (sem navegador)
 python tests/test_provisioning_target.py  # par destino+frase do provisionamento + os dois seams (offline)
 python tests/test_llm_costing.py  # cache do LLM: session id, header x-session-id, estimate_cost com desconto, usage_repo (offline)
 ```

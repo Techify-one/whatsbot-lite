@@ -156,7 +156,9 @@ export function GowaProxySettings({ id, onNotify }) {
       ${unsupported ? html`
         <div class="mt-3 p-3 rounded-lg bg-amber-50 border border-amber-300 text-amber-800 text-xs leading-relaxed">
           <strong>Requer o GOWA ${meta.min_version} ou mais novo.</strong>
-          A versão instalada é a ${meta.installed_version} e ela ignora a configuração de proxy.
+          ${meta.installed_version_known === false
+            ? 'Não consegui identificar a versão instalada, então não dá para garantir que ela respeita o proxy.'
+            : `A versão instalada é a ${meta.installed_version} e ela ignora a configuração de proxy.`}
           Atualize o GOWA no bloco acima e depois ative o proxy.
         </div>
       ` : null}

@@ -47,9 +47,15 @@ ROOT = Path(tempfile.mkdtemp(prefix="whatsbot-gowa-test-"))
 RELEASE = Path(tempfile.mkdtemp(prefix="whatsbot-gowa-release-"))
 BUNDLED_BYTES = b"#!/bin/sh\nexit 0\n"
 
+REAL_ROOT = gowa_binary.repo_root()  # captured before the fake root replaces it
+
 (ROOT / "bin").mkdir()
 (ROOT / "storages").mkdir()
-(ROOT / "GOWA_VERSION").write_text("8.8.0\n")
+# GOWA_VERSION is what the release RECOMMENDS; the installed (bundled) version
+# comes from the file next to the binary. They differ on purpose, as they do
+# after a self-update (which rewrites GOWA_VERSION but preserves bin/).
+(ROOT / "GOWA_VERSION").write_text("9.6.0\n")
+(ROOT / "bin" / (gowa_binary.binary_name() + ".version")).write_text("8.8.0\n")
 (ROOT / "bin" / gowa_binary.binary_name()).write_bytes(BUNDLED_BYTES)
 (ROOT / "bin" / gowa_binary.binary_name()).chmod(0o755)
 (ROOT / "storages" / "whatsapp.db").write_bytes(b"session")
@@ -160,7 +166,9 @@ gowa_updater._release_list_cache.update(_saved_release_list_cache)
 section("Binary resolution")
 
 check("sem override -> bundled", gowa_binary.resolve_binary()[1] == "bundled")
-check("versão bundled vem do GOWA_VERSION", gowa_binary.read_bundled_version() == "8.8.0")
+check("versão bundled vem do arquivo ao lado do binário, não do GOWA_VERSION",
+      gowa_binary.read_bundled_version() == "8.8.0")
+check("recomendada vem do GOWA_VERSION", gowa_binary.read_recommended_version() == "9.6.0")
 
 
 # ═══════════════════════════════════════════════════════════════════
@@ -249,9 +257,256 @@ gowa_binary.write_meta({"version": "9.9.9"})
 check("managed 9.9.9 ganha de bundled 8.8.0", gowa_binary.resolve_binary()[1] == "managed")
 
 (ROOT / "bin" / ".gowa_stamp").write_text("10.0.0\n")
-check("stamp mais novo tem precedência sobre GOWA_VERSION",
+check("stamp tem precedência sobre o arquivo .version",
       gowa_binary.read_bundled_version() == "10.0.0")
 check("bundled 10.0.0 ganha de managed 9.9.9", gowa_binary.resolve_binary()[1] == "bundled")
+(ROOT / "bin" / ".gowa_stamp").unlink()
+
+
+# ═══════════════════════════════════════════════════════════════════
+section("Versão instalada: ordem stamp → hash → arquivo → desconhecida")
+
+BIN = ROOT / "bin" / gowa_binary.binary_name()
+SIDECAR = ROOT / "bin" / (gowa_binary.binary_name() + ".version")
+STAMP = ROOT / "bin" / ".gowa_stamp"
+for leftover in (gowa_binary.managed_binary_path(), gowa_binary.meta_path()):
+    leftover.unlink(missing_ok=True)
+
+
+def identify() -> tuple[str, str]:
+    return gowa_binary.identify_bundled_version()
+
+
+# 2. Arquivo ao lado do binário vira a versão instalada.
+check("arquivo .version -> instalada", identify() == ("8.8.0", "version_file"), str(identify()))
+
+# 3. Stamp e arquivo presentes: o stamp vence.
+STAMP.write_text("8.5.0\n")
+check("stamp vence o arquivo .version", identify() == ("8.5.0", "stamp"), str(identify()))
+STAMP.unlink()
+
+# 1. Sem stamp, sem arquivo, GOWA_VERSION=9.6.0 e hash desconhecido: desconhecida
+#    (nunca 9.6.0 nem o baseline). É o cenário A do plano.
+SIDECAR.unlink()
+check("GOWA_VERSION=9.6.0 mas binário sem identificação -> desconhecida",
+      identify() == ("", "unknown"), str(identify()))
+check("read_bundled_version não cai em GOWA_VERSION", gowa_binary.read_bundled_version() == "")
+check("desconhecida não conta como versão", not gowa_binary.is_known_version(""))
+check("resolve_binary devolve versão vazia", gowa_binary.resolve_binary()[2] == "")
+check("desconhecida perde de qualquer versão", gowa_binary.version_cmp("", "0.0.1") < 0)
+
+# 4. Hash na tabela (binário falso + tabela monkeypatchada) -> versão da tabela.
+_orig_hashes = dict(gowa_binary.KNOWN_BINARY_HASHES)
+gowa_binary.KNOWN_BINARY_HASHES[hashlib.sha256(BUNDLED_BYTES).hexdigest()] = "8.5.0"
+check("hash conhecido -> versão da tabela", identify() == ("8.5.0", "hash"), str(identify()))
+
+# O hash é objetivo: ganha de um .version velho que sobrou de uma troca manual do .exe.
+SIDECAR.write_text("9.0.0\n")
+check("hash vence arquivo .version divergente", identify() == ("8.5.0", "hash"), str(identify()))
+SIDECAR.write_text("8.8.0\n")
+
+# Cache por (tamanho, mtime_ns): trocar o conteúdo invalida o hash.
+BIN.write_bytes(b"#!/bin/sh\nexit 0\n# trocado\n")
+check("conteúdo trocado invalida o cache do hash",
+      identify() == ("8.8.0", "version_file"), str(identify()))
+BIN.write_bytes(BUNDLED_BYTES)
+check("restaurar o conteúdo volta a achar o hash", identify() == ("8.5.0", "hash"), str(identify()))
+
+gowa_binary.KNOWN_BINARY_HASHES.clear()
+gowa_binary.KNOWN_BINARY_HASHES.update(_orig_hashes)
+
+# O hash só é recalculado quando o arquivo muda (resolve_binary roda o tempo todo).
+_reads = {"n": 0}
+_orig_open = Path.open
+
+
+def _counting_open(self, *args, **kwargs):
+    if self == BIN:
+        _reads["n"] += 1
+    return _orig_open(self, *args, **kwargs)
+
+
+Path.open = _counting_open  # type: ignore[method-assign]
+try:
+    SIDECAR.unlink()
+    for _ in range(5):
+        gowa_binary.resolve_binary()
+finally:
+    Path.open = _orig_open  # type: ignore[method-assign]
+check("hash cacheado: no máximo 1 leitura em 5 resoluções", _reads["n"] <= 1, str(_reads))
+SIDECAR.write_text("8.8.0\n")
+
+# Arquivo de versão ilegível/lixo não vira versão.
+SIDECAR.write_text("lixo\n")
+check("arquivo .version com lixo é ignorado", identify() == ("", "unknown"), str(identify()))
+SIDECAR.write_text("v8.8.0\r\n")
+check("arquivo .version aceita 'v' e CRLF", identify() == ("8.8.0", "version_file"), str(identify()))
+
+
+# ═══════════════════════════════════════════════════════════════════
+section("Cenário B: gerenciado 9.2.2 + bundled desconhecido não é descartado")
+
+SIDECAR.unlink()
+gowa_binary.managed_dir(create=True)
+gowa_binary.managed_binary_path().write_bytes(b"gerenciado")
+gowa_binary.write_meta({"version": "9.2.2"})
+_, _src, _ver = gowa_binary.resolve_binary()
+check("bundled desconhecido + GOWA_VERSION=9.6.0 -> usa o gerenciado", _src == "managed", _src)
+check("versão é a do gerenciado (9.2.2)", _ver == "9.2.2", _ver)
+
+gowa_binary.write_meta({"version": ""})
+check("gerenciado sem versão válida não vence do bundled",
+      gowa_binary.resolve_binary()[1] == "bundled")
+gowa_binary.managed_binary_path().unlink()
+gowa_binary.meta_path().unlink()
+SIDECAR.write_text("8.8.0\n")
+
+
+# ═══════════════════════════════════════════════════════════════════
+section("Recomendada x instalada (somente local, sem rede)")
+
+_settings: dict = {}
+
+
+def reco(installed: str, source: str = "bundled") -> dict:
+    return gowa_updater.recommended_info(installed, source, _settings)
+
+
+r = reco("8.8.0")
+check("9.6.0 recomendada > 8.8.0 instalada -> disponível", r["recommended_update_available"] is True)
+check("campos: recomendada", r["recommended_version"] == "9.6.0")
+check("campos: homologada", r["recommended_supported"] is True)
+check("campos: versão instalada conhecida", r["installed_version_known"] is True)
+check("campos: não adiada", r["recommended_skipped"] is False)
+check("link da release da recomendada", r["recommended_release_url"].endswith("/tag/v9.6.0"))
+
+r = reco("9.6.0")
+check("instalada == recomendada -> nada a recomendar", r["recommended_update_available"] is False)
+r = reco("9.7.0")
+check("instalada mais nova que a recomendada -> nada a recomendar",
+      r["recommended_update_available"] is False)
+
+r = reco("")
+check("instalada desconhecida -> recomendação disponível", r["recommended_update_available"] is True)
+check("instalada desconhecida -> installed_version_known falso", r["installed_version_known"] is False)
+
+r = reco("8.8.0", source="env")
+check("WHATSBOT_GOWA_BINARY (env) nunca recebe recomendação",
+      r["recommended_update_available"] is False)
+
+_settings["gowa_recommended_skipped_version"] = "9.6.0"
+check("'Agora não' em 9.6.0 -> recommended_skipped", reco("8.8.0")["recommended_skipped"] is True)
+(ROOT / "GOWA_VERSION").write_text("9.7.0\n")
+r = reco("8.8.0")
+check("GOWA_VERSION muda para 9.7.0 -> volta a perguntar",
+      r["recommended_skipped"] is False and r["recommended_version"] == "9.7.0")
+(ROOT / "GOWA_VERSION").write_text("9.6.0\n")
+_settings.clear()
+
+(ROOT / "GOWA_VERSION").write_text("10.0.0\n")
+check("recomendada fora da faixa homologada -> recommended_supported falso",
+      reco("8.8.0")["recommended_supported"] is False)
+(ROOT / "GOWA_VERSION").write_text("9.6.0\n")
+
+(ROOT / "GOWA_VERSION").unlink()
+r = reco("8.8.0")
+check("sem GOWA_VERSION -> sem recomendação",
+      r["recommended_version"] == "" and r["recommended_update_available"] is False)
+(ROOT / "GOWA_VERSION").write_text("9.6.0\n")
+
+# check() sem versão instalada: não consulta intervalo/analisador com tag vazia.
+_orig_latest = gowa_updater.fetch_latest_release
+_orig_interval = gowa_updater.fetch_release_interval
+_calls = {"interval": 0}
+gowa_updater.fetch_latest_release = lambda force=False: {
+    "version": "9.6.0", "url": "", "notes": "", "published_at": "",
+    "rate_limited": False, "cached": False,
+}
+
+
+def _interval_spy(*_a, **_k):
+    _calls["interval"] += 1
+    return []
+
+
+gowa_updater.fetch_release_interval = _interval_spy
+SIDECAR.unlink()
+state = gowa_updater.check({})
+check("check() com versão desconhecida: update_available", state["update_available"] is True)
+check("check() expõe installed_version_known=False", state["installed_version_known"] is False)
+check("check() não monta intervalo de releases com versão desconhecida", _calls["interval"] == 0)
+gowa_updater.fetch_latest_release = _orig_latest
+gowa_updater.fetch_release_interval = _orig_interval
+SIDECAR.write_text("8.8.0\n")
+
+
+# ═══════════════════════════════════════════════════════════════════
+section("Proxy com versão desconhecida")
+
+from gowa import proxy as gowa_proxy  # noqa: E402
+
+check("supports_proxy('') é falso", gowa_proxy.supports_proxy("") is False)
+SIDECAR.unlink()
+check("supports_proxy() com binário não identificado é falso", gowa_proxy.supports_proxy() is False)
+check("supports_proxy(8.11.0) continua verdadeiro", gowa_proxy.supports_proxy("8.11.0") is True)
+SIDECAR.write_text("8.8.0\n")
+
+
+# ═══════════════════════════════════════════════════════════════════
+section("Cenário A: após o self-update, recomendada disponível e install() funciona")
+
+# Estado pós-self-update: GOWA_VERSION novo, bin/ intocado e sem como se
+# identificar (instalação antiga de Windows, sem .version e com hash fora da tabela).
+SIDECAR.unlink()
+(ROOT / "GOWA_VERSION").write_text("9.6.0\n")
+r = reco(gowa_binary.installed_version())
+check("recomendada disponível mesmo sem identificar o binário",
+      r["recommended_update_available"] is True and r["installed_version_known"] is False)
+
+publish("9.6.0")
+result = gowa_updater.install(r["recommended_version"], manager=manager, client=client)
+check("install(recomendada) funciona", result["ok"], result.get("message", ""))
+check("gerenciado passa a valer", gowa_binary.resolve_binary()[1:] == ("managed", "9.6.0"),
+      str(gowa_binary.resolve_binary()))
+check("bin/ continua intacto", BIN.read_bytes() == BUNDLED_BYTES)
+r = reco(gowa_binary.installed_version())
+check("depois de instalar, nada mais a recomendar", r["recommended_update_available"] is False)
+check("previous_version desconhecida não quebra o meta", "previous_version" in gowa_binary.read_meta())
+
+# Rollback com bundled desconhecido: volta ao bin/, versão desconhecida.
+result = gowa_updater.rollback(manager=manager, client=client)
+check("rollback com bundled desconhecido funciona", result["ok"], result.get("message", ""))
+check("após o rollback a versão volta a ser desconhecida", gowa_binary.installed_version() == "")
+SIDECAR.write_text("8.8.0\n")
+
+
+# ═══════════════════════════════════════════════════════════════════
+section("Guardas de release (arquivos reais do repositório)")
+
+REAL_EXE = REAL_ROOT / "bin" / "gowa.exe"
+REAL_EXE_VERSION = REAL_ROOT / "bin" / "gowa.exe.version"
+if REAL_EXE.is_file():
+    real_digest = hashlib.sha256(REAL_EXE.read_bytes()).hexdigest()
+    check("sha256 do bin/gowa.exe está na tabela",
+          real_digest in gowa_binary.KNOWN_BINARY_HASHES, real_digest)
+    check("bin/gowa.exe.version existe", REAL_EXE_VERSION.is_file())
+    if REAL_EXE_VERSION.is_file():
+        check("tabela[sha256] == bin/gowa.exe.version",
+              gowa_binary.KNOWN_BINARY_HASHES.get(real_digest)
+              == REAL_EXE_VERSION.read_text(encoding="utf-8").strip(),
+              f"{gowa_binary.KNOWN_BINARY_HASHES.get(real_digest)} vs "
+              f"{REAL_EXE_VERSION.read_text(encoding='utf-8').strip()}")
+else:
+    print("  (bin/gowa.exe ausente neste checkout; guarda do hash ignorada)")
+
+_real_recommended = (REAL_ROOT / "GOWA_VERSION").read_text(encoding="utf-8").strip()
+check("GOWA_VERSION está dentro de GOWA_SUPPORTED_RANGE",
+      gowa_updater.is_supported(_real_recommended), _real_recommended)
+check("tabela de hashes só tem versões x.y.z",
+      all(gowa_updater._VERSION_RE.match(v) for v in gowa_binary.KNOWN_BINARY_HASHES.values()))
+check("tabela de hashes só tem sha256 minúsculo de 64 hex",
+      all(len(h) == 64 and h == h.lower() and set(h) <= set("0123456789abcdef")
+          for h in gowa_binary.KNOWN_BINARY_HASHES))
 
 
 # ═══════════════════════════════════════════════════════════════════

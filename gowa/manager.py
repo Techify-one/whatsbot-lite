@@ -136,7 +136,7 @@ class GOWAManager:
                     "Proxy configurado (%s) mas o GOWA %s é anterior a %s e vai ignorá-lo; "
                     "atualize o GOWA pelo painel.",
                     gowa_proxy.mask_url(proxy_url),
-                    gowa_binary.installed_version(),
+                    gowa_binary.installed_version() or "de versão não identificada",
                     gowa_proxy.MIN_GOWA_VERSION,
                 )
         else:

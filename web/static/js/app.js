@@ -20,7 +20,8 @@ import { GowaUpdateModal } from './components/GowaUpdateModal.js';
 import { WhatsNewModal } from './components/WhatsNewModal.js';
 import { useWebSocket } from './hooks/useWebSocket.js';
 import { useConfig } from './hooks/useConfig.js';
-import { checkAuth, authHeaders, getUnreadCount, installGowaUpdate, skipGowaVersion, checkForUpdates, performUpdate, skipWhatsBotVersion } from './services/api.js';
+import { checkAuth, authHeaders, getUnreadCount, installGowaUpdate, skipGowaVersion, skipRecommendedGowa, getGowaVersion, checkForUpdates, performUpdate, skipWhatsBotVersion } from './services/api.js';
+import { MODE_RECOMMENDED, MODE_COMPAT, recommendedPrompt, compatPrompt, nextPrompt, postponedRecommendation } from './utils/gowaPrompt.js';
 import { playTransferAlert } from './utils/alertSound.js';
 import { getNotifPref, playNotificationSound, showBrowserNotification } from './utils/notifications.js';
 
@@ -405,6 +406,29 @@ function App({ onLogout, hasPassword }) {
 
   useEffect(() => { checkWhatsBotUpdate(); }, [checkWhatsBotUpdate]);
 
+  // Does this WhatsBot-Lite release recommend a newer GOWA than the installed
+  // one? Answered from local files by GET /api/gowa/version (no GitHub, no LLM),
+  // so it is instant. It also runs on every WebSocket (re)connect: a self-update
+  // restarts the server without reloading the page, and that reconnect is the
+  // moment the new GOWA_VERSION becomes visible. "Agora não" is stored in the
+  // database, so none of those re-checks nags about a postponed version.
+  const recommendedRef = useRef({ version: '', skipped: false });
+  const checkRecommendedGowa = useCallback(() => {
+    getGowaVersion()
+      .then(res => {
+        if (!res || !res.ok) return;
+        recommendedRef.current = {
+          version: res.data.recommended_version || '',
+          skipped: res.data.recommended_skipped === true,
+        };
+        const prompt = recommendedPrompt(res.data);
+        if (prompt) setGowaUpdate(cur => nextPrompt(cur, prompt));
+      })
+      .catch(() => { /* ignore */ });
+  }, []);
+
+  useEffect(() => { checkRecommendedGowa(); }, [checkRecommendedGowa]);
+
   async function handleWhatsBotUpdateNow() {
     setWhatsbotUpdating(true);
     setWhatsbotUpdateError('');
@@ -484,7 +508,9 @@ function App({ onLogout, hasPassword }) {
     onGowaUpdateAvailable: useCallback((data) => {
       if (gowaUpdateIsSnoozed()) return;
       if (!data || data.whatsapp_update_recommended !== true) return;
-      setGowaUpdate(data);
+      // Same version the person just postponed through the recommended modal.
+      if (postponedRecommendation(data.latest_version, recommendedRef.current)) return;
+      setGowaUpdate(cur => nextPrompt(cur, { ...data, mode: MODE_COMPAT }));
     }, []),
     onGowaUpdateProgress: useCallback((data) => setGowaProgress(data), []),
     onGowaUpdateDone: useCallback((data) => {
@@ -493,7 +519,11 @@ function App({ onLogout, hasPassword }) {
       setNotification(data && data.message ? data.message : '');
       if (data && data.ok) setGowaUpdate(null);
     }, []),
-    onWsConnect: useCallback(() => { setWsConnected(true); checkWhatsBotUpdate(); }, [checkWhatsBotUpdate]),
+    onWsConnect: useCallback(() => {
+      setWsConnected(true);
+      checkWhatsBotUpdate();
+      checkRecommendedGowa();
+    }, [checkWhatsBotUpdate, checkRecommendedGowa]),
     onWsDisconnect: useCallback(() => setWsConnected(false), []),
   });
 
@@ -527,20 +557,8 @@ function App({ onLogout, hasPassword }) {
     fetch('/api/gowa/update/check', { headers: authHeaders() })
       .then(r => r.json())
       .then(res => {
-        const d = res && res.ok && res.data;
-        if (!d || !d.update_available || !d.latest_supported) return;
-        if (d.whatsapp_update_recommended !== true) return;
-        if (d.latest_version && d.latest_version === d.skipped_version) return;
-        setGowaUpdate({
-          latest_version: d.latest_version,
-          installed_version: d.installed_version,
-          supported: d.latest_supported,
-          release_url: d.release_url,
-          update_risk_level: d.update_risk_level,
-          update_reason: d.update_reason,
-          update_evidence: d.update_evidence,
-          assessed_versions: d.assessed_versions,
-        });
+        const prompt = compatPrompt(res && res.ok && res.data);
+        if (prompt) setGowaUpdate(cur => nextPrompt(cur, prompt));
       })
       .catch(() => { /* ignore */ });
   }, []);
@@ -567,6 +585,14 @@ function App({ onLogout, hasPassword }) {
   const handleGowaSkip = useCallback(async (version) => {
     setGowaUpdate(null);
     try { await skipGowaVersion(version); } catch { /* ignore */ }
+  }, []);
+
+  // "Agora não" on the recommended modal: stored in the database so it holds
+  // across reloads, browsers and restarts, and lifts when GOWA_VERSION changes.
+  const handleRecommendedLater = useCallback(async (version) => {
+    recommendedRef.current = { version, skipped: true };
+    setGowaUpdate(null);
+    try { await skipRecommendedGowa(version); } catch { /* ignore */ }
   }, []);
 
   // ── Browser-tab unread badge ("(3) WhatsBot-Lite"), like WhatsApp Web ──────────
@@ -753,8 +779,10 @@ function App({ onLogout, hasPassword }) {
       />` : null}
 
       ${gowaUpdate ? html`<${GowaUpdateModal}
+        mode=${gowaUpdate.mode || MODE_COMPAT}
         latestVersion=${gowaUpdate.latest_version}
         installedVersion=${gowaUpdate.installed_version}
+        installedKnown=${gowaUpdate.installed_known !== false}
         supported=${gowaUpdate.supported !== false}
         releaseUrl=${gowaUpdate.release_url}
         riskLevel=${gowaUpdate.update_risk_level}
@@ -763,7 +791,14 @@ function App({ onLogout, hasPassword }) {
         installing=${gowaInstalling}
         progress=${gowaProgress}
         onUpdateNow=${handleGowaUpdateNow}
-        onLater=${() => { snoozeGowaUpdate(24 * 60 * 60 * 1000); setGowaUpdate(null); }}
+        onLater=${() => {
+          if (gowaUpdate.mode === MODE_RECOMMENDED) {
+            handleRecommendedLater(gowaUpdate.latest_version);
+          } else {
+            snoozeGowaUpdate(24 * 60 * 60 * 1000);
+            setGowaUpdate(null);
+          }
+        }}
         onSkip=${handleGowaSkip}
       />` : null}
 

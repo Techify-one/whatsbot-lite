@@ -11,6 +11,7 @@ export function Dashboard({ status, qrAvailable, qrVersion, config, saving, onSa
   const connected = status?.connected || false;
   const [showQR, setShowQR] = useState(!connected);
   const [gowaVersion, setGowaVersion] = useState('');
+  const [gowaVersionKnown, setGowaVersionKnown] = useState(true);
   const userDismissedQR = useRef(false);
   const prevConnected = useRef(connected);
 
@@ -40,7 +41,11 @@ export function Dashboard({ status, qrAvailable, qrVersion, config, saving, onSa
   useEffect(() => {
     let alive = true;
     getGowaVersion()
-      .then(res => { if (alive && res && res.ok) setGowaVersion(res.data.installed_version || ''); })
+      .then(res => {
+        if (!alive || !res || !res.ok) return;
+        setGowaVersion(res.data.installed_version || '');
+        setGowaVersionKnown(res.data.installed_version_known !== false);
+      })
       .catch(() => { /* ignore */ });
     return () => { alive = false; };
   }, []);
@@ -57,6 +62,7 @@ export function Dashboard({ status, qrAvailable, qrVersion, config, saving, onSa
         botPhone=${status?.bot_phone || ''}
         botName=${status?.bot_name || ''}
         gowaVersion=${gowaVersion}
+        gowaVersionKnown=${gowaVersionKnown}
         onOpenQR=${() => setShowQR(true)}
       />
 

@@ -95,6 +95,26 @@ export function GowaSettings({ id, autoCheck, onAutoCheckChange, onNotify }) {
     }
   }
 
+  // Installs the version this WhatsBot-Lite release recommends (the validated
+  // one), not GitHub's latest. Same endpoint, same lock, same rollback.
+  async function handleInstallRecommended() {
+    if (!info || !info.recommended_version) return;
+    setWorking(true);
+    setProgress({ phase: 'downloading', progress: 0 });
+    try {
+      const res = await installGowaUpdate(info.recommended_version, false);
+      if (!res || !res.ok) {
+        if (onNotify) onNotify((res && res.error) || 'Falha ao atualizar o GOWA.');
+        setWorking(false);
+        setProgress(null);
+      }
+    } catch (e) {
+      if (onNotify) onNotify('Falha ao atualizar o GOWA.');
+      setWorking(false);
+      setProgress(null);
+    }
+  }
+
   async function handleRollback() {
     if (!confirmRollback) {
       setConfirmRollback(true);
@@ -116,7 +136,14 @@ export function GowaSettings({ id, autoCheck, onAutoCheckChange, onNotify }) {
     }
   }
 
-  const installed = info?.installed_version || '...';
+  const installedKnown = info?.installed_version_known !== false;
+  const installed = info ? (info.installed_version || '') : '...';
+  const recommendedVersion = info?.recommended_version || '';
+  // Only worth showing when it differs from "Última" (otherwise it is noise).
+  const showRecommended = !!(
+    info?.recommended_update_available && info?.recommended_supported
+    && recommendedVersion && recommendedVersion !== (info?.latest_version || '')
+  );
   const latest = info?.latest_version || '';
   const updateAvailable = !!info?.update_available;
   const whatsappRecommended = info?.whatsapp_update_recommended === true;
@@ -139,11 +166,21 @@ export function GowaSettings({ id, autoCheck, onAutoCheckChange, onNotify }) {
               <label class="text-sm font-semibold text-wa-text">Versão do GOWA</label>
               <div class="flex items-center gap-3 mt-1.5 flex-wrap">
                 <span class="text-xs text-wa-secondary">
-                  Instalada: <span class="font-mono font-semibold text-wa-text">${installed}</span>
+                  Instalada:
+                  ${info && !installedKnown ? html`
+                    <span class="font-semibold text-amber-700" title="Sem como saber qual versão do GOWA está em uso">não identificada</span>
+                  ` : html`
+                    <span class="font-mono font-semibold text-wa-text">${installed}</span>
+                  `}
                 </span>
                 ${info?.source ? html`
                   <span class="text-[11px] px-2 py-0.5 rounded-full bg-wa-secondary/20 text-wa-secondary">
                     ${SOURCE_LABELS[info.source] || info.source}
+                  </span>
+                ` : null}
+                ${showRecommended ? html`
+                  <span class="text-xs text-wa-secondary">
+                    Recomendada nesta versão: <span class="font-mono font-semibold text-blue-600">${recommendedVersion}</span>
                   </span>
                 ` : null}
                 ${latest ? html`
@@ -151,7 +188,7 @@ export function GowaSettings({ id, autoCheck, onAutoCheckChange, onNotify }) {
                     Última: <span class="font-mono font-semibold ${updateAvailable ? 'text-blue-600' : 'text-green-600'}">${latest}</span>
                   </span>
                 ` : null}
-                ${!checking && latest && !updateAvailable ? html`
+                ${!checking && latest && !updateAvailable && installedKnown && !info?.recommended_update_available ? html`
                   <span class="text-xs text-green-600 font-medium">Atualizado</span>
                 ` : null}
                 ${updateAvailable && latestSupported ? html`
@@ -177,6 +214,16 @@ export function GowaSettings({ id, autoCheck, onAutoCheckChange, onNotify }) {
               >
                 ${checking ? '...' : 'Verificar'}
               </button>
+              ${showRecommended && platformOk && !(updateAvailable && recommendedVersion === latest) ? html`
+                <button
+                  onClick=${handleInstallRecommended}
+                  disabled=${working}
+                  class="px-4 py-2 bg-blue-600 hover:bg-blue-700 disabled:opacity-50 text-white text-sm font-medium rounded-lg transition-colors whitespace-nowrap"
+                  title="Versão validada para este WhatsBot-Lite"
+                >
+                  ${working ? 'Atualizando...' : `Instalar a recomendada (${recommendedVersion})`}
+                </button>
+              ` : null}
               ${updateAvailable && platformOk ? html`
                 <button
                   onClick=${handleUpdate}
