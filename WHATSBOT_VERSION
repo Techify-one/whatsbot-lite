@@ -1,6 +1,10 @@
 {
-  "version": "0.2.13",
+  "version": "0.2.14",
   "changelog": [
+    {
+      "version": "0.2.14",
+      "description": "- O painel agora identifica de verdade qual versão do motor do WhatsApp (GOWA) está instalada, em vez de mostrar a versão da release. Se não for possível descobrir, aparece \"não identificada\" e nunca um número chutado\n- Corrige o aviso errado no Windows: quem atualizou o WhatsBot-Lite pelo botão do painel e manteve o gowa.exe antigo não vê mais 9.6.0 por engano\n- Novo aviso \"Motor do WhatsApp recomendado\" depois de atualizar o WhatsBot-Lite, quando a nova versão sugere um motor mais novo que o instalado. Nunca é obrigatório: use Atualizar agora ou Agora não, e a escolha não se repete para a mesma versão\n- Em Painel → Sistema → GOWA, o botão Instalar a recomendada instala a versão validada por esta release (com conferência de integridade e volta automática se algo falhar)\n- A versão instalada também aparece ao lado do status de conexão no topo do Painel"
+    },
     {
       "version": "0.2.13",
       "description": "- O motor do WhatsApp (GOWA) foi atualizado da versão 8.8.0 para a 9.6.0; quem instala esta release do zero já recebe a versão nova\n- Correções do GOWA: o QR Code de login não fica mais desatualizado, mensagens de contas WhatsApp Business deixam de aparecer em branco e o telefone volta a aparecer em contatos compartilhados do iPhone\n- Linux, macOS e Docker baixam o GOWA 9.6.0 sozinhos\n- Atenção, Windows: quem já usa o WhatsBot-Lite e atualiza pelo botão do painel mantém o gowa.exe antigo (a pasta bin é preservada na atualização) e o painel pode mostrar 9.6.0 mesmo assim. Para usar o 9.6.0, baixe o zip desta release e substitua o arquivo bin/gowa.exe"
