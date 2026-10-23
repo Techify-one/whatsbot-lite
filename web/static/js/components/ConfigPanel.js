@@ -1,7 +1,7 @@
 import { h } from 'preact';
 import { useState, useEffect } from 'preact/hooks';
 import htm from 'htm';
-import { testApiKey, checkForUpdates, performUpdate, markAllUnread, markAllRead } from '../services/api.js';
+import { testApiKey, checkForUpdates, performUpdate, waitForCloudUpdate, markAllUnread, markAllRead } from '../services/api.js';
 import { ModelSelect } from './ModelSelect.js';
 import { DatabaseSettings } from './DatabaseSettings.js';
 import { GowaSettings } from './GowaSettings.js';
@@ -305,7 +305,16 @@ export function ConfigPanel({ config, saving, onSave, onNotify }) {
     setUpdating(true);
     try {
       const res = await performUpdate();
-      if (res.ok) {
+      if (res.ok && res.data?.cloud) {
+        onNotify(res.data.message);
+        const done = await waitForCloudUpdate(res.data.task_id);
+        if (done.ok) {
+          onNotify(`WhatsBot-Lite atualizado para v${done.version}. Recarregando...`);
+          window.location.reload();
+        } else {
+          onNotify(done.error);
+        }
+      } else if (res.ok) {
         onNotify(res.data?.message || 'Atualização concluída. O WhatsBot-Lite será reiniciado automaticamente.');
       } else {
         onNotify(res.error || 'Erro ao atualizar.');

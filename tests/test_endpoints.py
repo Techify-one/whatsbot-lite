@@ -1019,6 +1019,33 @@ for path in ["/", "/painel", "/sandbox", "/costs", "/arquivos"]:
     check(f"GET {path} -> 200", r.status_code == 200)
 
 # ═══════════════════════════════════════════════════════════════════
+#  22b. WhatsBot-Lite update mode (local default; cloud only via env)
+# ═══════════════════════════════════════════════════════════════════
+section("WhatsBot-Lite — Update Mode")
+
+r = client.get("/api/update/local-version")
+d = r.json().get("data", {})
+check("GET /update/local-version -> 200", r.status_code == 200)
+check("local-version reports local mode by default", d.get("update_mode") == "local")
+check("local-version has an installation_id", len(str(d.get("installation_id") or "")) == 36)
+r2 = client.get("/api/update/local-version")
+check("installation_id is stable", r2.json().get("data", {}).get("installation_id") == d.get("installation_id"))
+check("installation_id is stored in the database", config_repo.get("installation_id") == d.get("installation_id"))
+_cloud_iid = "874b8da7-4a3f-4ec3-ba8b-facca9898c7f"
+os.environ["WHATSBOT_INSTALLATION_ID"] = _cloud_iid
+r = client.get("/api/update/local-version")
+check("cloud env id wins", r.json().get("data", {}).get("installation_id") == _cloud_iid)
+check("cloud env id is written to the database", config_repo.get("installation_id") == _cloud_iid)
+del os.environ["WHATSBOT_INSTALLATION_ID"]
+r = client.get("/api/update/local-version")
+check("database keeps the id without the env var",
+      r.json().get("data", {}).get("installation_id") == _cloud_iid)
+r = client.put("/api/config", json={"installation_id": "00000000-0000-4000-8000-000000000000"})
+check("PUT /config cannot overwrite installation_id", config_repo.get("installation_id") == _cloud_iid)
+r = client.get("/api/update/status/" + "0" * 32)
+check("GET /update/status in local mode -> 404", r.status_code == 404)
+
+# ═══════════════════════════════════════════════════════════════════
 #  23. GOWA version / update
 # ═══════════════════════════════════════════════════════════════════
 section("GOWA — Version & Update")

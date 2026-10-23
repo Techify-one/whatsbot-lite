@@ -228,6 +228,38 @@ def get_llm_session_id() -> str:
     _llm_session_id_cache = current
     return current
 
+
+INSTALLATION_ID_ENV = "WHATSBOT_INSTALLATION_ID"
+
+
+def _valid_uuid(value) -> str:
+    try:
+        return str(uuid.UUID(str(value).strip()))
+    except (ValueError, AttributeError, TypeError):
+        return ""
+
+
+def get_installation_id() -> str:
+    """Return the unique, persistent id of this installation (config key ``installation_id``).
+
+    Stored in the installation's own database, so it survives restarts and
+    updates (self-update in place or a new Docker image on WhatsBot Cloud).
+    WhatsBot Cloud passes the id it registered at provisioning time in
+    ``WHATSBOT_INSTALLATION_ID``; that value wins and is written to the
+    database. Elsewhere a UUID v4 is generated once and reused afterwards.
+    """
+    stored = _valid_uuid(config_repo.get("installation_id", ""))
+    from_env = _valid_uuid(os.environ.get(INSTALLATION_ID_ENV, ""))
+    if from_env:
+        if stored != from_env:
+            config_repo.set("installation_id", from_env)
+        return from_env
+    if not stored:
+        stored = str(uuid.uuid4())
+        config_repo.set("installation_id", stored)
+    return stored
+
+
 class Settings:
     def __init__(self):
         self.data_dir = get_data_dir()

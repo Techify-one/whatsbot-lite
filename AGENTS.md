@@ -322,6 +322,28 @@ próxima seção), o self-update do WhatsBot-Lite em si ([server/routes/update.p
   [.claude/commands/release-up.md](.claude/commands/release-up.md). Esquecer esse passo deixa o
   self-update reportando uma versão desatualizada mesmo depois de uma release nova.
 
+### Modo cloud (WhatsBot Cloud)
+
+No WhatsBot Cloud o container é somente leitura (gVisor, `read_only`), então sobrescrever `/app` não
+funciona. A variável `WHATS_UPDATE_MODE` escolhe o fluxo; **sem ela, o modo é `local`** (comportamento
+acima, inalterado no Windows e no Docker próprio).
+
+- `WHATS_UPDATE_MODE=cloud`: `GET /api/update/check` continua consultando o GitHub e o botão/modal são
+  os mesmos. `POST /api/update` **não** grava arquivos nem reinicia: envia `{"installation_id",
+  "version": "<tag>"}` ao servidor de hospedagem (`WHATS_UPDATE_URL`, padrão
+  `DEFAULT_CLOUD_UPDATE_URL`, um Cloudflare Worker) com o header `X-Installation-Token`
+  (`WHATS_UPDATE_TOKEN`). O servidor troca a imagem Docker e recria só este container, e devolve um
+  `task_id`. A resposta traz `cloud: true` e `task_id`.
+- `GET /api/update/status/{task_id}` (só no modo cloud) repassa o andamento (`status`
+  `running|succeeded|failed`, `phase`). O frontend (`waitForCloudUpdate` em `services/api.js`) faz
+  polling tolerando os segundos em que o container está sendo recriado e recarrega a página no fim.
+- O token fica só no backend; o navegador nunca o vê. Ele autoriza atualizar apenas esta instalação.
+- **Installation ID** (`config.settings.get_installation_id()`): guardado no banco da instalação, chave
+  `installation_id` da tabela `config` (não editável pelo `PUT /api/config`). No Cloud vem de
+  `WHATSBOT_INSTALLATION_ID` (definido pelo servidor no provisionamento), que prevalece e é gravado no
+  banco; fora dele, um UUID v4 gerado uma vez. Sobrevive a reinícios, self-updates e troca de imagem.
+  Exposto em `GET /api/update/local-version`.
+
 ## Atualização do GOWA
 
 O binário GOWA pode ser atualizado pelo painel em qualquer ambiente (Linux, macOS, Windows, Docker,

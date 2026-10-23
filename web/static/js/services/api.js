@@ -426,6 +426,33 @@ export async function performUpdate() {
   return request('POST', '/api/update');
 }
 
+export async function getCloudUpdateStatus(taskId) {
+  return request('GET', `/api/update/status/${encodeURIComponent(taskId)}`);
+}
+
+// WhatsBot Cloud: the server recreates this installation, so the backend goes
+// offline for a few seconds mid-task. Polls until the task ends, tolerating that
+// gap. Resolves to { ok: true, version } or { ok: false, error }.
+export async function waitForCloudUpdate(taskId, { intervalMs = 3000, timeoutMs = 15 * 60 * 1000 } = {}) {
+  const deadline = Date.now() + timeoutMs;
+  let lastError = '';
+  while (Date.now() < deadline) {
+    await new Promise(resolve => setTimeout(resolve, intervalMs));
+    try {
+      const res = await getCloudUpdateStatus(taskId);
+      if (res && res.ok) {
+        if (res.data.status === 'succeeded') return { ok: true, version: res.data.version };
+        if (res.data.status === 'failed') return { ok: false, error: res.data.error || 'A atualização falhou.' };
+      } else if (res && res.error) {
+        lastError = res.error;
+      }
+    } catch (_) {
+      // Container being recreated: keep waiting.
+    }
+  }
+  return { ok: false, error: lastError || 'A atualização demorou mais que o esperado.' };
+}
+
 export async function skipWhatsBotVersion(version) {
   return request('POST', '/api/update/skip-version', { version });
 }

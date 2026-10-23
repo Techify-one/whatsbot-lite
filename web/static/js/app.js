@@ -20,7 +20,7 @@ import { GowaUpdateModal } from './components/GowaUpdateModal.js';
 import { WhatsNewModal } from './components/WhatsNewModal.js';
 import { useWebSocket } from './hooks/useWebSocket.js';
 import { useConfig } from './hooks/useConfig.js';
-import { checkAuth, authHeaders, getUnreadCount, installGowaUpdate, skipGowaVersion, skipRecommendedGowa, getGowaVersion, checkForUpdates, performUpdate, skipWhatsBotVersion } from './services/api.js';
+import { checkAuth, authHeaders, getUnreadCount, installGowaUpdate, skipGowaVersion, skipRecommendedGowa, getGowaVersion, checkForUpdates, performUpdate, waitForCloudUpdate, skipWhatsBotVersion } from './services/api.js';
 import { MODE_RECOMMENDED, MODE_COMPAT, recommendedPrompt, compatPrompt, nextPrompt, postponedRecommendation } from './utils/gowaPrompt.js';
 import { playTransferAlert } from './utils/alertSound.js';
 import { getNotifPref, playNotificationSound, showBrowserNotification } from './utils/notifications.js';
@@ -440,6 +440,19 @@ function App({ onLogout, hasPassword }) {
         return;
       }
       setNotification(res.data?.message || 'Atualização instalada. Reiniciando o WhatsBot-Lite...');
+      if (res.data?.cloud) {
+        // WhatsBot Cloud: the hosting server swaps the image and recreates
+        // the container. Reload once it is back so the new frontend loads.
+        const done = await waitForCloudUpdate(res.data.task_id);
+        if (done.ok) {
+          setNotification(`WhatsBot-Lite atualizado para v${done.version}. Recarregando...`);
+          window.location.reload();
+          return;
+        }
+        setWhatsbotUpdateError(done.error);
+        setWhatsbotUpdating(false);
+        return;
+      }
       // Keep the modal locked while the server restarts. The WebSocket
       // reconnect runs checkWhatsBotUpdate again and closes it.
     } catch (_) {

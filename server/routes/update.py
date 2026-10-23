@@ -3,15 +3,18 @@
 import asyncio
 import json
 import logging
+import os
 import re
 import shutil
 import tempfile
 import time
+import urllib.error
 import urllib.parse
 import urllib.request
 import zipfile
 from pathlib import Path
 
+from config.settings import get_installation_id
 from plugins.restart import schedule_restart
 from server.helpers import _ok, _err
 
@@ -26,6 +29,15 @@ RELEASE_CACHE_TTL = 300
 RELEASE_FAILURE_CACHE_TTL = 60
 
 VERSION_FILENAME = "WHATSBOT_VERSION"
+
+# Update mode. "local" (default, Windows/Linux/Docker self-hosted) overwrites the
+# code in place. "cloud" (WhatsBot Cloud: read-only container) asks the hosting
+# server to recreate this installation on the release's Docker image instead.
+UPDATE_MODE_ENV = "WHATS_UPDATE_MODE"
+CLOUD_UPDATE_URL_ENV = "WHATS_UPDATE_URL"
+CLOUD_UPDATE_TOKEN_ENV = "WHATS_UPDATE_TOKEN"
+DEFAULT_CLOUD_UPDATE_URL = "https://update.techify.site/api/updates"
+TASK_ID_RE = re.compile(r"^[0-9a-f]{32}$")
 
 PRESERVE_DIRS = {"storages", "statics", "logs", "venv", ".git", "bin"}
 PRESERVE_FILES = {".env"}
@@ -85,6 +97,88 @@ def _read_local_version(project_root: Path) -> dict:
     except Exception as exc:
         logger.debug("Failed to read %s: %s", VERSION_FILENAME, exc)
         return {"version": "0.0.0", "changelog": [], "popup_shown": True}
+
+
+def _update_mode() -> str:
+    return "cloud" if os.environ.get(UPDATE_MODE_ENV, "").strip().lower() == "cloud" else "local"
+
+
+def _cloud_update_url() -> str:
+    return (os.environ.get(CLOUD_UPDATE_URL_ENV, "").strip() or DEFAULT_CLOUD_UPDATE_URL).rstrip("/")
+
+
+def _cloud_request(method: str, url: str, body: dict | None = None) -> tuple[int, dict]:
+    """Call the cloud update endpoint. Returns (HTTP status, JSON body)."""
+    token = os.environ.get(CLOUD_UPDATE_TOKEN_ENV, "").strip()
+    data = json.dumps(body).encode("utf-8") if body is not None else None
+    req = urllib.request.Request(
+        url,
+        data=data,
+        method=method,
+        headers={
+            "Content-Type": "application/json",
+            "User-Agent": "WhatsBot",
+            "X-Installation-Token": token,
+        },
+    )
+    try:
+        with urllib.request.urlopen(req, timeout=20) as resp:
+            return resp.status, json.loads(resp.read().decode("utf-8") or "{}")
+    except urllib.error.HTTPError as exc:
+        try:
+            payload = json.loads(exc.read().decode("utf-8") or "{}")
+        except ValueError:
+            payload = {}
+        return exc.code, payload
+
+
+def _cloud_error_message(status: int, payload: dict) -> str:
+    detail = payload.get("detail")
+    if isinstance(detail, dict):
+        detail = detail.get("error")
+    messages = {
+        "version_not_found": "A versão solicitada não foi encontrada no GitHub.",
+        "invalid_version": "Versão inválida.",
+        "installation_not_found": "Esta instalação não está cadastrada no servidor de atualizações.",
+        "update_in_progress": "Já existe uma atualização em andamento.",
+        "unhealthy": "A nova versão não iniciou corretamente.",
+        "interrupted": "A atualização foi interrompida no servidor.",
+    }
+    if detail in messages:
+        return messages[detail]
+    if status in (401, 403):
+        return "O servidor de atualizações recusou esta instalação."
+    return f"Erro no servidor de atualizações ({detail or status})."
+
+
+def _start_cloud_update(installation_id: str, tag: str) -> dict:
+    """Ask the hosting server to move this installation to *tag* (async task)."""
+    body = {"installation_id": installation_id, "version": tag}
+    try:
+        status, payload = _cloud_request("POST", _cloud_update_url(), body)
+    except (urllib.error.URLError, TimeoutError, ValueError) as exc:
+        raise RuntimeError(f"Não foi possível contatar o servidor de atualizações: {exc}") from exc
+    if status != 202 or not payload.get("task_id"):
+        raise RuntimeError(_cloud_error_message(status, payload))
+    return payload
+
+
+def _cloud_update_status(task_id: str) -> dict:
+    try:
+        status, payload = _cloud_request("GET", f"{_cloud_update_url()}/{task_id}")
+    except (urllib.error.URLError, TimeoutError, ValueError) as exc:
+        raise RuntimeError(f"Não foi possível contatar o servidor de atualizações: {exc}") from exc
+    if status != 200:
+        raise RuntimeError(_cloud_error_message(status, payload))
+    result = {
+        "task_id": task_id,
+        "status": payload.get("status", ""),
+        "phase": payload.get("phase", ""),
+        "version": str(payload.get("version") or "").lstrip("v"),
+    }
+    if payload.get("status") == "failed":
+        result["error"] = _cloud_error_message(500, {"detail": payload.get("error")})
+    return result
 
 
 def _fetch_release_without_api() -> dict:
@@ -259,6 +353,7 @@ def register_routes(app, deps):
         notifications_enabled = bool(settings.get("whatsbot_update_notifications_enabled", True))
         skipped_version = str(settings.get("whatsbot_skipped_version", "") or "")
         return _ok({
+            "update_mode": _update_mode(),
             "current_version": current["version"],
             "latest_version": latest["version"],
             "latest_description": latest["description"],
@@ -279,6 +374,8 @@ def register_routes(app, deps):
         # show everything a user missed if they skipped several releases.
         project_root = _get_project_root(settings)
         info = await asyncio.to_thread(_read_local_version, project_root)
+        info["installation_id"] = await asyncio.to_thread(get_installation_id)
+        info["update_mode"] = _update_mode()
         return _ok(info)
 
     @app.post("/api/update/popup-seen")
@@ -304,6 +401,25 @@ def register_routes(app, deps):
         latest = await asyncio.to_thread(_fetch_latest_release)
         if not latest["tag"]:
             return _err("Não foi possível encontrar uma release publicada no GitHub.", 502)
+        if _update_mode() == "cloud":
+            # Read-only container: the hosting server swaps the Docker image and
+            # recreates this installation. No local write, no self-restart.
+            try:
+                installation_id = await asyncio.to_thread(get_installation_id)
+                task = await asyncio.to_thread(_start_cloud_update, installation_id, latest["tag"])
+            except RuntimeError as exc:
+                return _err(str(exc), 502)
+            return _ok({
+                "cloud": True,
+                "task_id": task["task_id"],
+                "status": task.get("status", ""),
+                "phase": task.get("phase", ""),
+                "version": latest["version"],
+                "message": (
+                    f"Atualização para v{latest['version']} solicitada ao servidor. "
+                    "O WhatsBot-Lite ficará indisponível por alguns segundos."
+                ),
+            })
         try:
             result = await asyncio.to_thread(_perform_update, project_root, latest["tag"])
         except RuntimeError as exc:
@@ -315,3 +431,15 @@ def register_routes(app, deps):
         result["message"] += " O WhatsBot-Lite será reiniciado automaticamente para aplicar a atualização."
         schedule_restart(reason=f"WhatsBot-Lite updated to v{result['version']}")
         return _ok(result)
+
+    @app.get("/api/update/status/{task_id}")
+    async def cloud_update_status(task_id: str):
+        # Cloud mode only: progress of the task started by POST /api/update.
+        if _update_mode() != "cloud":
+            return _err("Disponível apenas no WhatsBot Cloud.", 404)
+        if not TASK_ID_RE.match(task_id):
+            return _err("Tarefa inválida.", 400)
+        try:
+            return _ok(await asyncio.to_thread(_cloud_update_status, task_id))
+        except RuntimeError as exc:
+            return _err(str(exc), 502)

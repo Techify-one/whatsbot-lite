@@ -309,7 +309,7 @@ Em **Painel → Sistema → Banco de dados**, consulte o banco em uso ou informe
 
 ### Atualizar o WhatsBot-Lite
 
-Quando uma nova versão estiver disponível, o WhatsBot-Lite mostra um aviso ao abrir ou atualizar a página. Nele é possível atualizar agora, ignorar somente aquela versão ou nunca receber avisos. Se uma versão for ignorada, a próxima volta a ser avisada. Para reativar ou desligar os avisos, abra **Painel → Sistema → Avançado → Atualizar WhatsBot-Lite**. Quando uma atualização é aplicada, o WhatsBot-Lite reinicia automaticamente para carregar a nova versão.
+Quando uma nova versão estiver disponível, o WhatsBot-Lite mostra um aviso ao abrir ou atualizar a página. Nele é possível atualizar agora, ignorar somente aquela versão ou nunca receber avisos. Se uma versão for ignorada, a próxima volta a ser avisada. Para reativar ou desligar os avisos, abra **Painel → Sistema → Avançado → Atualizar WhatsBot-Lite**. Quando uma atualização é aplicada, o WhatsBot-Lite reinicia automaticamente para carregar a nova versão. No WhatsBot Cloud o botão é o mesmo: a atualização é feita pelo servidor, o WhatsBot-Lite fica indisponível por alguns segundos e a página recarrega sozinha quando termina.
 
 [Abrir atualizações]({{base_url}}/painel?aba=sistema#update)
 
