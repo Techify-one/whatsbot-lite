@@ -1,6 +1,10 @@
 {
-  "version": "0.2.14",
+  "version": "0.2.15",
   "changelog": [
+    {
+      "version": "0.2.15",
+      "description": "- Nova atualização pelo servidor no WhatsBot Cloud: como lá o sistema não pode ter os próprios arquivos sobrescritos, o botão Atualizar agora pede ao servidor de hospedagem que troque a versão da sua instalação\n- O painel acompanha o andamento da atualização e recarrega a página sozinho quando termina, mesmo que fique fora do ar por alguns segundos durante a troca\n- Cada instalação passa a ter um identificador próprio e permanente, que sobrevive a reinícios e atualizações\n- Quem usa o WhatsBot-Lite no Windows, Linux, macOS ou Docker próprio não percebe diferença: a atualização continua funcionando como antes"
+    },
     {
       "version": "0.2.14",
       "description": "- O painel agora identifica de verdade qual versão do motor do WhatsApp (GOWA) está instalada, em vez de mostrar a versão da release. Se não for possível descobrir, aparece \"não identificada\" e nunca um número chutado\n- Corrige o aviso errado no Windows: quem atualizou o WhatsBot-Lite pelo botão do painel e manteve o gowa.exe antigo não vê mais 9.6.0 por engano\n- Novo aviso \"Motor do WhatsApp recomendado\" depois de atualizar o WhatsBot-Lite, quando a nova versão sugere um motor mais novo que o instalado. Nunca é obrigatório: use Atualizar agora ou Agora não, e a escolha não se repete para a mesma versão\n- Em Painel → Sistema → GOWA, o botão Instalar a recomendada instala a versão validada por esta release (com conferência de integridade e volta automática se algo falhar)\n- A versão instalada também aparece ao lado do status de conexão no topo do Painel"
