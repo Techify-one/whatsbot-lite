@@ -1,6 +1,10 @@
 {
-  "version": "0.2.16",
+  "version": "0.2.17",
   "changelog": [
+    {
+      "version": "0.2.17",
+      "description": "- RELEASE TEMPORÁRIA DE TESTE: validação manual da atualização do WhatsBot Cloud de 0.2.16 para 0.2.17\n- Sem mudanças funcionais em relação à 0.2.16; apenas a versão e esta nota foram atualizadas para permitir o teste\n- Esta release será removida após o teste"
+    },
     {
       "version": "0.2.16",
       "description": "- RELEASE TEMPORÁRIA DE TESTE: validação manual da atualização do WhatsBot Cloud de 0.2.15 para 0.2.16\n- Sem mudanças funcionais em relação à 0.2.15; apenas a versão e esta nota foram atualizadas para permitir o teste\n- Esta release será removida após o teste"
