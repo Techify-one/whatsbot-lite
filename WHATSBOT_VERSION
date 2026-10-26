@@ -1,6 +1,10 @@
 {
-  "version": "0.2.15",
+  "version": "0.2.16",
   "changelog": [
+    {
+      "version": "0.2.16",
+      "description": "- RELEASE TEMPORÁRIA DE TESTE: validação manual da atualização do WhatsBot Cloud de 0.2.15 para 0.2.16\n- Sem mudanças funcionais em relação à 0.2.15; apenas a versão e esta nota foram atualizadas para permitir o teste\n- Esta release será removida após o teste"
+    },
     {
       "version": "0.2.15",
       "description": "- Nova atualização pelo servidor no WhatsBot Cloud: como lá o sistema não pode ter os próprios arquivos sobrescritos, o botão Atualizar agora pede ao servidor de hospedagem que troque a versão da sua instalação\n- O painel acompanha o andamento da atualização e recarrega a página sozinho quando termina, mesmo que fique fora do ar por alguns segundos durante a troca\n- Cada instalação passa a ter um identificador próprio e permanente, que sobrevive a reinícios e atualizações\n- Quem usa o WhatsBot-Lite no Windows, Linux, macOS ou Docker próprio não percebe diferença: a atualização continua funcionando como antes"
