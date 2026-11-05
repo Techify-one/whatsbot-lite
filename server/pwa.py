@@ -26,6 +26,11 @@ def register_pwa_routes(app: FastAPI, web_dir: Path) -> None:
             headers=headers,
         )
 
+    @app.get("/favicon.ico", include_in_schema=False)
+    async def favicon() -> FileResponse:
+        # Browsers request this path on their own, ignoring the <link rel="icon"> tags.
+        return FileResponse(web_dir / "static" / "icons" / "favicon.ico", media_type="image/x-icon", headers=headers)
+
     @app.get("/offline.html", include_in_schema=False)
     async def offline() -> FileResponse:
         return FileResponse(web_dir / "offline.html", media_type="text/html", headers=headers)

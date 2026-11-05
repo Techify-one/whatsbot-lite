@@ -2,6 +2,7 @@ import { h, render } from 'preact';
 import { useState, useEffect, useCallback, useRef } from 'preact/hooks';
 import htm from 'htm';
 import { InstallApp } from './components/InstallApp.js';
+import { InstallPrompt } from './components/InstallPrompt.js';
 import { Dashboard } from './components/Dashboard.js';
 import { Sandbox } from './components/Sandbox.js';
 import { Contacts } from './components/Contacts.js';
@@ -163,7 +164,7 @@ function GearMenu({ tab, onTabChange, pluginScreens, hasPassword, onLogout, acco
   }
 
   return html`
-    <div ref=${menuRef} class="fixed top-3 right-3 z-50">
+    <div ref=${menuRef} class="app-gear fixed z-50">
       <button
         onClick=${() => setOpen(!open)}
         class="w-[36px] h-[36px] flex items-center justify-center rounded-full bg-wa-bg shadow-md border border-wa-border hover:bg-wa-hover transition-colors"
@@ -406,7 +407,7 @@ function App({ onLogout, hasPassword }) {
 
   useEffect(() => { checkWhatsBotUpdate(); }, [checkWhatsBotUpdate]);
 
-  // Does this WhatsBot-Lite release recommend a newer GOWA than the installed
+  // Does this Whatsbot-lite release recommend a newer GOWA than the installed
   // one? Answered from local files by GET /api/gowa/version (no GitHub, no LLM),
   // so it is instant. It also runs on every WebSocket (re)connect: a self-update
   // restarts the server without reloading the page, and that reconnect is the
@@ -435,17 +436,17 @@ function App({ onLogout, hasPassword }) {
     try {
       const res = await performUpdate();
       if (!res || !res.ok) {
-        setWhatsbotUpdateError((res && res.error) || 'Não foi possível atualizar o WhatsBot-Lite.');
+        setWhatsbotUpdateError((res && res.error) || 'Não foi possível atualizar o Whatsbot-lite.');
         setWhatsbotUpdating(false);
         return;
       }
-      setNotification(res.data?.message || 'Atualização instalada. Reiniciando o WhatsBot-Lite...');
+      setNotification(res.data?.message || 'Atualização instalada. Reiniciando o Whatsbot-lite...');
       if (res.data?.cloud) {
         // WhatsBot Cloud: the hosting server swaps the image and recreates
         // the container. Reload once it is back so the new frontend loads.
         const done = await waitForCloudUpdate(res.data.task_id);
         if (done.ok) {
-          setNotification(`WhatsBot-Lite atualizado para v${done.version}. Recarregando...`);
+          setNotification(`Whatsbot-lite atualizado para v${done.version}. Recarregando...`);
           window.location.reload();
           return;
         }
@@ -456,7 +457,7 @@ function App({ onLogout, hasPassword }) {
       // Keep the modal locked while the server restarts. The WebSocket
       // reconnect runs checkWhatsBotUpdate again and closes it.
     } catch (_) {
-      setWhatsbotUpdateError('Erro de conexão ao atualizar o WhatsBot-Lite.');
+      setWhatsbotUpdateError('Erro de conexão ao atualizar o Whatsbot-lite.');
       setWhatsbotUpdating(false);
     }
   }
@@ -608,7 +609,7 @@ function App({ onLogout, hasPassword }) {
     try { await skipRecommendedGowa(version); } catch { /* ignore */ }
   }, []);
 
-  // ── Browser-tab unread badge ("(3) WhatsBot-Lite"), like WhatsApp Web ──────────
+  // ── Browser-tab unread badge ("(3) Whatsbot-lite"), like WhatsApp Web ──────────
   // Single source of truth is the backend count; we refresh it (debounced) on
   // boot, on WS events that change unread state, and when the contacts list
   // reports a change (e.g. the operator opened/read a chat — no WS event fires
@@ -638,7 +639,7 @@ function App({ onLogout, hasPassword }) {
   // Tab-title badge — gated by the "tab notification" preference.
   useEffect(() => {
     const tabBadge = getNotifPref('tab');
-    document.title = (tabBadge && unreadConvos > 0) ? `(${unreadConvos}) WhatsBot-Lite` : 'WhatsBot-Lite';
+    document.title = (tabBadge && unreadConvos > 0) ? `(${unreadConvos}) Whatsbot-lite` : 'Whatsbot-lite';
   }, [unreadConvos, notifVersion]);
 
   // Browser notification + sound on a new INBOUND message (from a contact).
@@ -655,7 +656,7 @@ function App({ onLogout, hasPassword }) {
       if (!preview) {
         preview = m.media_type ? 'Enviou uma mídia' : 'Nova mensagem';
       }
-      showBrowserNotification('WhatsBot-Lite — nova mensagem', preview.slice(0, 140));
+      showBrowserNotification('Whatsbot-lite — nova mensagem', preview.slice(0, 140));
     }
   }, [newMessage]);
 
@@ -670,7 +671,7 @@ function App({ onLogout, hasPassword }) {
 
   if (loading) {
     return html`
-      <div class="h-screen flex items-center justify-center">
+      <div class="h-dvh flex items-center justify-center">
         <div class="text-center text-wa-secondary animate-pulse-slow">Carregando...</div>
       </div>
     `;
@@ -710,16 +711,17 @@ function App({ onLogout, hasPassword }) {
 
   return html`
     <div class="h-dvh overflow-hidden flex flex-col relative app-safe-area">
+      <${InstallPrompt} />
       <${GearMenu} tab=${tab} onTabChange=${setTab} pluginScreens=${pluginScreens} hasPassword=${hasPassword} onLogout=${onLogout} accountUrl=${config && config.account_url} />
 
       <main class="flex-1 min-h-0 ${tab === 'chat' ? 'overflow-hidden' : 'overflow-auto'} ${tab !== 'contacts' ? 'bg-wa-panel' : ''}">
         ${activePluginScreen
-          ? html`<div class="w-full min-w-0 p-4">
+          ? html`<div class="page-wrap w-full min-w-0 p-4">
               <${PageHeader} title=${activePluginScreen.title} onBack=${() => setTab('contacts')} />
               <${PluginScreen} screen=${activePluginScreen} />
             </div>`
           : tab === 'tools'
-            ? html`<div class="max-w-5xl mx-auto p-4">
+            ? html`<div class="page-wrap max-w-5xl mx-auto p-4">
                 <${PageHeader} title="Tools" onBack=${() => setTab('contacts')} />
                 <${ToolsManager} />
               </div>`
@@ -729,9 +731,9 @@ function App({ onLogout, hasPassword }) {
                 <${FileManager} />
               </div>`
             : tab === 'chat'
-              ? html`<div class="h-full pt-12 md:p-3 md:pt-3"><${Chat} /></div>`
+              ? html`<div class="h-full md:p-3"><${Chat} /></div>`
             : tab === 'plugins'
-            ? html`<div class="max-w-5xl mx-auto p-4">
+            ? html`<div class="page-wrap max-w-5xl mx-auto p-4">
                 <${PageHeader} title="Plugins" onBack=${() => setTab('contacts')} />
                 <${PluginsManager} onPluginsChanged=${() => {
                   fetch('/api/plugins/manifest', { headers: authHeaders() }).then(r => r.json()).then(res => {
@@ -747,7 +749,7 @@ function App({ onLogout, hasPassword }) {
                 }} />
               </div>`
             : tab === 'dashboard'
-              ? html`<div class="max-w-5xl mx-auto p-4">
+              ? html`<div class="page-wrap max-w-5xl mx-auto p-4">
                   <${PageHeader} title="Painel" onBack=${() => setTab('contacts')} />
                   <${Dashboard}
                     status=${status}
@@ -763,12 +765,12 @@ function App({ onLogout, hasPassword }) {
               : tab === 'contacts'
                 ? html`<${Contacts} newMessage=${newMessage} chatPresence=${chatPresence} contactInfoUpdated=${contactInfoUpdated} tagsChanged=${tagsChanged} contactTagsUpdated=${contactTagsUpdated} contactAiToggled=${contactAiToggled} messagesRead=${messagesRead} messageStatus=${messageStatus} messageAction=${messageAction} messageReaction=${messageReaction} mediaUpdated=${mediaUpdated} avatarUpdated=${avatarUpdated} groupParticipantsChanged=${groupParticipantsChanged} initialContactId=${initialContactId} initialMessageId=${initialMessageId} wsConnected=${wsConnected} config=${config} onConfigSave=${save} onUnreadChange=${refreshUnreadCount} />`
                 : tab === 'costs'
-                  ? html`<div class="max-w-5xl mx-auto p-4">
+                  ? html`<div class="page-wrap max-w-5xl mx-auto p-4">
                       <${PageHeader} title="Custos de IA" onBack=${() => setTab('contacts')} />
                       <${CostsDashboard} />
                     </div>`
                   : tab === 'executions'
-                    ? html`<div class="max-w-5xl mx-auto p-4 h-full">
+                    ? html`<div class="page-wrap max-w-5xl mx-auto p-4 h-full">
                         <${PageHeader} title="Execuções" onBack=${() => {
                           if (window.location.pathname.match(/^\/executions\/\d+$/)) {
                             history.pushState(null, '', '/executions');
@@ -868,7 +870,7 @@ function AuthGate() {
 
   if (authState === 'checking') {
     return html`
-      <div class="h-screen flex items-center justify-center">
+      <div class="h-dvh flex items-center justify-center">
         <div class="text-center text-wa-secondary animate-pulse-slow">Carregando...</div>
       </div>
     `;

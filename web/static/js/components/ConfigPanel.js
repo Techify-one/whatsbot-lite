@@ -301,7 +301,7 @@ export function ConfigPanel({ config, saving, onSave, onNotify }) {
   }
 
   const handleUpdate = async () => {
-    if (!confirm('Deseja atualizar o WhatsBot-Lite para a versão mais recente?\nO sistema reiniciará automaticamente após a atualização.')) return;
+    if (!confirm('Deseja atualizar o Whatsbot-lite para a versão mais recente?\nO sistema reiniciará automaticamente após a atualização.')) return;
     setUpdating(true);
     try {
       const res = await performUpdate();
@@ -309,13 +309,13 @@ export function ConfigPanel({ config, saving, onSave, onNotify }) {
         onNotify(res.data.message);
         const done = await waitForCloudUpdate(res.data.task_id);
         if (done.ok) {
-          onNotify(`WhatsBot-Lite atualizado para v${done.version}. Recarregando...`);
+          onNotify(`Whatsbot-lite atualizado para v${done.version}. Recarregando...`);
           window.location.reload();
         } else {
           onNotify(done.error);
         }
       } else if (res.ok) {
-        onNotify(res.data?.message || 'Atualização concluída. O WhatsBot-Lite será reiniciado automaticamente.');
+        onNotify(res.data?.message || 'Atualização concluída. O Whatsbot-lite será reiniciado automaticamente.');
       } else {
         onNotify(res.error || 'Erro ao atualizar.');
       }
@@ -611,7 +611,7 @@ export function ConfigPanel({ config, saving, onSave, onNotify }) {
             <button
               onClick=${handleTestKey}
               disabled=${testing}
-              class="px-4 py-2 bg-wa-panel hover:bg-wa-hover disabled:opacity-50 text-wa-text text-sm rounded-lg transition-colors whitespace-nowrap border border-wa-border"
+              class="px-4 py-2 bg-wa-panel hover:bg-wa-hover disabled:opacity-50 text-wa-text text-sm rounded-lg transition-colors border border-wa-border"
             >
               ${testing ? '...' : 'Testar'}
             </button>
@@ -1083,7 +1083,7 @@ export function ConfigPanel({ config, saving, onSave, onNotify }) {
         <div id="update" class="p-3 bg-wa-panel rounded-lg border border-wa-border scroll-mt-4">
           <div class="flex items-start justify-between gap-4">
             <div>
-              <label class="text-sm font-semibold text-wa-text">Atualizar WhatsBot-Lite</label>
+              <label class="text-sm font-semibold text-wa-text">Atualizar Whatsbot-lite</label>
               <div class="flex items-center gap-3 mt-1.5">
                 <span class="text-xs text-wa-secondary">
                   Atual: <span class="font-mono font-semibold text-wa-text">${currentVersion || '...'}</span>
@@ -1126,7 +1126,7 @@ export function ConfigPanel({ config, saving, onSave, onNotify }) {
                 <button
                   onClick=${handleUpdate}
                   disabled=${updating}
-                  class="px-4 py-2 bg-blue-600 hover:bg-blue-700 disabled:opacity-50 text-white text-sm font-medium rounded-lg transition-colors whitespace-nowrap"
+                  class="px-4 py-2 bg-blue-600 hover:bg-blue-700 disabled:opacity-50 text-white text-sm font-medium rounded-lg transition-colors"
                 >
                   ${updating ? 'Atualizando...' : 'Atualizar'}
                 </button>
@@ -1150,7 +1150,7 @@ export function ConfigPanel({ config, saving, onSave, onNotify }) {
       </div>
 
       <!-- Save Button (sticky) -->
-      <div class="sticky bottom-0 z-10 bg-wa-panel pt-2 pb-1">
+      <div class="save-bar sticky bottom-0 z-10 bg-wa-panel pt-2 pb-1">
         <button
           onClick=${handleSave}
           disabled=${saving}

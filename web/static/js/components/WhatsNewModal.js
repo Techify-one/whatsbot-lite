@@ -47,7 +47,7 @@ export function WhatsNewModal({
             <ul class="space-y-2 text-sm text-wa-text">
               ${items.map(item => html`<li class="flex gap-2"><span class="text-blue-600 font-bold">•</span><span>${item}</span></li>`)}
             </ul>
-          ` : html`<p class="text-sm text-wa-secondary">Esta versão contém melhorias e correções do WhatsBot-Lite.</p>`}
+          ` : html`<p class="text-sm text-wa-secondary">Esta versão contém melhorias e correções do Whatsbot-lite.</p>`}
         </div>
 
         ${error ? html`

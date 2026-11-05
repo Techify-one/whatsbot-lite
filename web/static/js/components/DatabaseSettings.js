@@ -128,7 +128,7 @@ export function DatabaseSettings({ id, onNotify }) {
               class="rounded-lg border border-wa-border px-3 py-2 text-sm font-mono"
             />
             <p class="text-xs text-wa-secondary">
-              O banco destino precisa estar vazio. Após a migração o WhatsBot-Lite reinicia
+              O banco destino precisa estar vazio. Após a migração o Whatsbot-lite reinicia
               automaticamente apontando pro Postgres; o arquivo SQLite atual é preservado
               para rollback manual.
             </p>
@@ -249,16 +249,16 @@ function WipeAndRetryPanel({ conflicts, target, running, confirming, ack, onAckC
     <div class="rounded-lg border border-red-400 bg-red-50 p-3 text-xs text-red-900 flex flex-col gap-2">
       <div class="font-bold text-sm">⚠️ Atenção: ação destrutiva irreversível</div>
       <p>
-        O WhatsBot-Lite vai executar <code>DROP SCHEMA public CASCADE</code> em:
+        O Whatsbot-lite vai executar <code>DROP SCHEMA public CASCADE</code> em:
       </p>
       <div class="font-mono break-all bg-wa-bg/60 rounded px-2 py-1">${target}</div>
       <p>
         Isso apaga <strong>TODAS</strong> as tabelas, índices e sequências do schema <code>public</code>
-        deste banco — incluindo dados que não pertencem ao WhatsBot-Lite, se houver.
+        deste banco — incluindo dados que não pertencem ao Whatsbot-lite, se houver.
         <strong>Não há rollback.</strong>
       </p>
       <p>
-        Confirme que esse banco é exclusivo do WhatsBot-Lite e que você tem backup.
+        Confirme que esse banco é exclusivo do Whatsbot-lite e que você tem backup.
         Digite <code class="font-bold">${expectedAck}</code> abaixo para liberar o botão:
       </p>
       <input

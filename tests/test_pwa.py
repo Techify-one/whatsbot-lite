@@ -30,6 +30,7 @@ class PwaRoutesTest(unittest.TestCase):
             ("/sw.js", "application/javascript"),
             ("/manifest.webmanifest", "application/manifest+json"),
             ("/offline.html", "text/html"),
+            ("/favicon.ico", "image/x-icon"),
         ):
             with self.subTest(path=path):
                 response = self.client.get(path)
@@ -46,11 +47,20 @@ class PwaRoutesTest(unittest.TestCase):
             self.assertEqual(manifest[key], "/")
         self.assertEqual(manifest["lang"], "pt-BR")
         self.assertEqual(manifest["display"], "standalone")
+        self.assertEqual(manifest["name"], "Whatsbot-lite")
+        self.assertEqual(manifest["short_name"], "Whatsbot-lite")
         self.assertEqual({icon["sizes"] for icon in manifest["icons"]}, {"192x192", "512x512"})
         self.assertTrue(any(icon["purpose"] == "maskable" for icon in manifest["icons"]))
         for icon in manifest["icons"]:
             self.assertEqual(icon["type"], "image/png")
-            self.assertTrue((ROOT / "web" / icon["src"].lstrip("/")).is_file())
+            # Cache-busting query strings (?v=N) are not part of the file name.
+            self.assertTrue((ROOT / "web" / icon["src"].split("?")[0].lstrip("/")).is_file())
+
+    def test_index_declares_names_and_icons(self):
+        html = (ROOT / "web/index.html").read_text(encoding="utf-8")
+        self.assertIn("<title>Whatsbot-lite</title>", html)
+        self.assertIn('name="apple-mobile-web-app-title" content="Whatsbot-lite"', html)
+        self.assertIn("favicon-32.png", html)
 
     def test_offline_page_is_self_contained(self):
         html = self.client.get("/offline.html").text

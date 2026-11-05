@@ -216,7 +216,7 @@ def create_app(
 
     _docs_enabled = os.getenv("WHATSBOT_ENABLE_DOCS", "0") == "1"
     app = FastAPI(
-        title="WhatsBot-Lite",
+        title="Whatsbot-lite",
         lifespan=lifespan,
         docs_url="/docs" if _docs_enabled else None,
         redoc_url="/redoc" if _docs_enabled else None,

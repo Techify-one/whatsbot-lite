@@ -14,18 +14,18 @@ const html = htm.bind(h);
 
 function StatusBadge({ plugin }) {
   if (plugin.error) {
-    return html`<span class="px-2 py-0.5 rounded-full text-[11px] bg-red-100 text-red-700">Manifest inválido</span>`;
+    return html`<span class="plug-badge plug-badge--err">Manifest inválido</span>`;
   }
   if (plugin.load_error) {
-    return html`<span class="px-2 py-0.5 rounded-full text-[11px] bg-red-100 text-red-700" title=${plugin.load_error}>Erro ao carregar</span>`;
+    return html`<span class="plug-badge plug-badge--err" title=${plugin.load_error}>Erro ao carregar</span>`;
   }
   if (plugin.enabled && plugin.loaded) {
-    return html`<span class="px-2 py-0.5 rounded-full text-[11px] bg-green-100 text-green-700">Ativo</span>`;
+    return html`<span class="plug-badge plug-badge--ok">Ativo</span>`;
   }
   if (plugin.enabled && !plugin.loaded) {
-    return html`<span class="px-2 py-0.5 rounded-full text-[11px] bg-yellow-100 text-yellow-800">Ativado (aguardando restart)</span>`;
+    return html`<span class="plug-badge plug-badge--warn">Aguardando restart</span>`;
   }
-  return html`<span class="px-2 py-0.5 rounded-full text-[11px] bg-wa-panel text-wa-secondary">Desativado</span>`;
+  return html`<span class="plug-badge">Desativado</span>`;
 }
 
 
@@ -56,6 +56,7 @@ export function PluginsManager({ onPluginsChanged }) {
   const [restarting, setRestarting] = useState(false);
   const [exporting, setExporting] = useState({}); // { [pluginId]: pct (0-100) }
   const [updating, setUpdating] = useState(null); // pid sendo atualizado
+  const [menuOpen, setMenuOpen] = useState(null); // pid com o menu "⋯" aberto
   const fileRef = useRef(null);
   const updateFileRef = useRef(null);
   const pendingUpdatePid = useRef(null); // pid alvo do <input> de atualização
@@ -78,6 +79,16 @@ export function PluginsManager({ onPluginsChanged }) {
   }
 
   useEffect(() => { load(); }, []);
+
+  // Close the "⋯" menu on any outside tap / Escape.
+  useEffect(() => {
+    if (!menuOpen) return undefined;
+    const onDown = e => { if (!e.target.closest || !e.target.closest('.plug-menu-wrap')) setMenuOpen(null); };
+    const onKey = e => { if (e.key === 'Escape') setMenuOpen(null); };
+    document.addEventListener('pointerdown', onDown);
+    document.addEventListener('keydown', onKey);
+    return () => { document.removeEventListener('pointerdown', onDown); document.removeEventListener('keydown', onKey); };
+  }, [menuOpen]);
 
   // After we trigger a restart, poll /health until it responds again, then reload.
   useEffect(() => {
@@ -247,103 +258,76 @@ export function PluginsManager({ onPluginsChanged }) {
     <div>
       ${restarting ? html`<${RestartBanner} />` : null}
 
-      <div class="flex items-center justify-between mb-4">
-        <div class="text-[12px] text-wa-secondary">
-          API do core: ${apiVersion}
-          · ${plugins.length} plugin${plugins.length === 1 ? '' : 's'}
+      <div class="plug-toolbar">
+        <div class="plug-count">
+          <span class="plug-count-n">${plugins.length}</span>
+          plugin${plugins.length === 1 ? '' : 's'}
+          <span class="plug-api">API do core ${apiVersion}</span>
         </div>
-        <div class="flex items-center gap-2">
-          <a
-            href="https://techify.one/whatsbot/plugins"
-            target="_blank"
-            rel="noopener noreferrer"
-            class="px-3 py-1.5 bg-red-600 text-white rounded text-[14px] hover:bg-red-700"
-          >Loja de Plugins</a>
+        <div class="plug-toolbar-actions">
           <input type="file" ref=${fileRef} accept=".zip" class="hidden"
             onChange=${e => importPlugin(e.target.files && e.target.files[0])} />
           <input type="file" ref=${updateFileRef} accept=".zip" class="hidden"
             onChange=${e => updatePlugin(pendingUpdatePid.current, e.target.files && e.target.files[0])} />
-          <button
-            disabled=${importing}
-            onClick=${() => fileRef.current && fileRef.current.click()}
-            class="px-3 py-1.5 bg-wa-teal text-white rounded text-[14px] disabled:opacity-50"
-          >${importing ? 'Importando…' : 'Importar (.zip)'}</button>
+          <a href="https://techify.one/whatsbot/plugins" target="_blank" rel="noopener noreferrer"
+             class="plug-btn plug-btn--outline">Loja de Plugins</a>
+          <button disabled=${importing} onClick=${() => fileRef.current && fileRef.current.click()}
+            class="plug-btn plug-btn--primary">${importing ? 'Importando…' : 'Importar (.zip)'}</button>
         </div>
       </div>
 
       ${plugins.length === 0
         ? html`
-          <div class="bg-wa-panel border border-wa-border rounded p-6 text-center">
+          <div class="plug-empty">
             <div class="font-medium mb-1">Nenhum plugin instalado</div>
             <div class="text-sm text-wa-secondary">
               Coloque um plugin em <code>storages/plugins/&lt;id&gt;/</code> ou importe um arquivo .zip.
             </div>
           </div>`
         : html`
-          <div class="grid grid-cols-1 md:grid-cols-2 gap-3">
+          <div class="plug-grid">
             ${plugins.map(p => html`
-              <div key=${p.id} class="bg-wa-bg border border-wa-border rounded-lg p-4">
-                <div class="flex items-start justify-between gap-2">
-                  <div>
-                    <div class="font-medium text-[15px]">${p.name || p.id}</div>
-                    <div class="text-[12px] text-wa-secondary">
-                      <code>${p.id}</code>${p.version ? html` · v${p.version}` : null}
-                      ${p.author ? html` · ${p.author}` : null}
-                    </div>
+              <div key=${p.id} class="plug-card">
+                <div class="plug-card-head">
+                  <div class="plug-title">
+                    <div class="plug-name">${p.name || p.id}</div>
+                    <div class="plug-meta"><code>${p.id}</code>${p.version ? html` · v${p.version}` : null}${p.author ? html` · ${p.author}` : null}</div>
                   </div>
                   <${StatusBadge} plugin=${p} />
                 </div>
-                ${p.description ? html`
-                  <div class="text-[13px] mt-2 text-wa-text">${p.description}</div>
-                ` : null}
+                ${p.description ? html`<p class="plug-desc">${p.description}</p>` : null}
                 ${(p.dependencies && p.dependencies.length) ? html`
-                  <div class="text-[11px] mt-2 text-wa-secondary">
-                    📦 Instala ao ativar: ${p.dependencies.join(', ')}
+                  <div class="plug-note">📦 Instala ao ativar: ${p.dependencies.join(', ')}</div>` : null}
+                ${p.load_error ? html`<div class="plug-error">${p.load_error}</div>` : null}
+                <div class="plug-actions">
+                  <label class="plug-switch" title=${p.enabled ? 'Desativar plugin' : 'Ativar plugin'}>
+                    <input type="checkbox" checked=${!!p.enabled} onChange=${() => toggle(p.id, !p.enabled)} />
+                    <span class="plug-switch-track" aria-hidden="true"></span>
+                    <span class="plug-switch-label">${p.enabled ? 'Ativado' : 'Desativado'}</span>
+                  </label>
+                  <button onClick=${() => setSettingsOpen(p.id)} disabled=${!p.loaded}
+                    class="plug-btn plug-btn--outline plug-btn--sm">Configurar</button>
+                  <div class="plug-menu-wrap">
+                    <button type="button" class="plug-btn plug-btn--ghost plug-btn--icon" aria-label="Mais ações"
+                      aria-haspopup="menu" aria-expanded=${menuOpen === p.id}
+                      onClick=${() => setMenuOpen(menuOpen === p.id ? null : p.id)}>⋯</button>
+                    ${menuOpen === p.id ? html`
+                      <div class="plug-menu" role="menu">
+                        <button role="menuitem" disabled=${exporting[p.id] != null}
+                          onClick=${() => { setMenuOpen(null); exportPlugin(p.id); }}>${exporting[p.id] != null ? 'Exportando…' : 'Exportar'}</button>
+                        <button role="menuitem" disabled=${updating === p.id}
+                          title="Enviar um novo .zip preservando os dados/tabelas do plugin"
+                          onClick=${() => { setMenuOpen(null); pickUpdate(p.id); }}>${updating === p.id ? 'Atualizando…' : 'Atualizar'}</button>
+                        <button role="menuitem" class="is-danger"
+                          onClick=${() => { setMenuOpen(null); deletePlugin(p.id); }}>Deletar</button>
+                      </div>` : null}
                   </div>
-                ` : null}
-                ${p.load_error ? html`
-                  <div class="mt-2 text-[12px] text-red-700 bg-red-50 border border-red-100 rounded px-2 py-1 break-all">
-                    ${p.load_error}
-                  </div>
-                ` : null}
-                <div class="flex flex-wrap gap-2 mt-3">
-                  <button
-                    onClick=${() => toggle(p.id, !p.enabled)}
-                    class="px-3 py-1 text-[13px] rounded ${p.enabled ? 'bg-yellow-500 text-white' : 'bg-green-600 text-white'}"
-                  >${p.enabled ? 'Desativar' : 'Ativar'}</button>
-                  <button
-                    onClick=${() => setSettingsOpen(p.id)}
-                    disabled=${!p.loaded}
-                    class="px-3 py-1 text-[13px] rounded bg-wa-panel border border-wa-border disabled:opacity-50"
-                  >Configurar</button>
-                  <button
-                    onClick=${() => exportPlugin(p.id)}
-                    disabled=${exporting[p.id] != null}
-                    class="px-3 py-1 text-[13px] rounded bg-wa-panel border border-wa-border disabled:opacity-50"
-                  >${exporting[p.id] != null ? 'Exportando…' : 'Exportar'}</button>
-                  <button
-                    onClick=${() => pickUpdate(p.id)}
-                    disabled=${updating === p.id}
-                    title="Enviar um novo .zip preservando os dados/tabelas do plugin"
-                    class="px-3 py-1 text-[13px] rounded bg-blue-50 text-blue-700 border border-blue-200 disabled:opacity-50"
-                  >${updating === p.id ? 'Atualizando…' : 'Atualizar'}</button>
-                  <button
-                    onClick=${() => deletePlugin(p.id)}
-                    class="px-3 py-1 text-[13px] rounded bg-red-50 text-red-700 border border-red-200"
-                  >Deletar</button>
                 </div>
                 ${exporting[p.id] != null ? html`
-                  <div class="mt-3">
-                    <div class="flex items-center justify-between text-[11px] text-wa-secondary mb-1">
-                      <span>Exportando…</span>
-                      <span>${exporting[p.id]}%</span>
-                    </div>
-                    <div class="h-2 bg-wa-panel border border-wa-border rounded-full overflow-hidden">
-                      <div class="h-full bg-wa-teal transition-all duration-150"
-                           style=${`width:${exporting[p.id]}%`}></div>
-                    </div>
-                  </div>
-                ` : null}
+                  <div class="plug-progress">
+                    <div class="plug-progress-row"><span>Exportando…</span><span>${exporting[p.id]}%</span></div>
+                    <div class="plug-progress-track"><div class="plug-progress-bar" style=${`width:${exporting[p.id]}%`}></div></div>
+                  </div>` : null}
               </div>
             `)}
           </div>`
@@ -351,7 +335,7 @@ export function PluginsManager({ onPluginsChanged }) {
 
       ${settingsOpen ? html`
         <div class="fixed inset-0 bg-black/40 z-50 flex items-center justify-center">
-          <div class="bg-wa-bg rounded-lg shadow-xl ${cfgScreen ? 'max-w-2xl' : 'max-w-lg'} w-full mx-4 max-h-[85vh] overflow-y-auto">
+          <div class="bg-wa-bg rounded-lg shadow-xl ${cfgScreen ? 'max-w-2xl' : 'max-w-lg'} w-full mx-4 max-h-[85dvh] overflow-y-auto">
             <div class="border-b border-wa-border px-4 py-3 flex items-center justify-between">
               <div class="font-medium">Configurações — ${(cfgPlugin && cfgPlugin.name) || settingsOpen}</div>
               <button class="text-wa-secondary hover:text-wa-text"

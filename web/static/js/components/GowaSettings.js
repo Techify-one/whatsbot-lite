@@ -95,7 +95,7 @@ export function GowaSettings({ id, autoCheck, onAutoCheckChange, onNotify }) {
     }
   }
 
-  // Installs the version this WhatsBot-Lite release recommends (the validated
+  // Installs the version this Whatsbot-lite release recommends (the validated
   // one), not GitHub's latest. Same endpoint, same lock, same rollback.
   async function handleInstallRecommended() {
     if (!info || !info.recommended_version) return;
@@ -218,8 +218,8 @@ export function GowaSettings({ id, autoCheck, onAutoCheckChange, onNotify }) {
                 <button
                   onClick=${handleInstallRecommended}
                   disabled=${working}
-                  class="px-4 py-2 bg-blue-600 hover:bg-blue-700 disabled:opacity-50 text-white text-sm font-medium rounded-lg transition-colors whitespace-nowrap"
-                  title="Versão validada para este WhatsBot-Lite"
+                  class="px-4 py-2 bg-blue-600 hover:bg-blue-700 disabled:opacity-50 text-white text-sm font-medium rounded-lg transition-colors"
+                  title="Versão validada para este Whatsbot-lite"
                 >
                   ${working ? 'Atualizando...' : `Instalar a recomendada (${recommendedVersion})`}
                 </button>
@@ -228,7 +228,7 @@ export function GowaSettings({ id, autoCheck, onAutoCheckChange, onNotify }) {
                 <button
                   onClick=${handleUpdate}
                   disabled=${working}
-                  class="px-4 py-2 ${confirmUnsupported ? 'bg-amber-600 hover:bg-amber-700' : 'bg-blue-600 hover:bg-blue-700'} disabled:opacity-50 text-white text-sm font-medium rounded-lg transition-colors whitespace-nowrap"
+                  class="px-4 py-2 ${confirmUnsupported ? 'bg-amber-600 hover:bg-amber-700' : 'bg-blue-600 hover:bg-blue-700'} disabled:opacity-50 text-white text-sm font-medium rounded-lg transition-colors"
                 >
                   ${working ? 'Atualizando...' : confirmUnsupported ? 'Instalar mesmo assim' : `Atualizar para ${latest}`}
                 </button>
@@ -256,7 +256,7 @@ export function GowaSettings({ id, autoCheck, onAutoCheckChange, onNotify }) {
           ${updateAvailable && !latestSupported ? html`
             <div class="mt-3 p-3 rounded-lg bg-amber-50 border border-amber-300 text-amber-800 text-xs leading-relaxed">
               <strong>Versão ${latest} fora da faixa homologada</strong> (${info?.supported_range}).
-              O WhatsBot-Lite não foi testado com ela e a atualização pode quebrar o envio
+              O Whatsbot-lite não foi testado com ela e a atualização pode quebrar o envio
               e o recebimento de mensagens. Se algo der errado, use Reverter abaixo.
             </div>
           ` : null}

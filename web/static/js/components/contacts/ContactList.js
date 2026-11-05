@@ -246,7 +246,7 @@ export function ContactList({ contacts, loading, search, onSearchChange, selecte
             <span class="text-white/80 text-[13px] animate-pulse">Sem conexão</span>
             <span class="inline-block w-2 h-2 rounded-full bg-red-400 animate-pulse" title="Offline"></span>
           ` : html`
-            <span class="text-white text-[15px] font-medium opacity-90">${showArchived ? 'Arquivados' : 'WhatsBot-Lite'}</span>
+            <span class="text-white text-[15px] font-medium opacity-90">${showArchived ? 'Arquivados' : 'Whatsbot-lite'}</span>
             <span class="inline-block w-2 h-2 rounded-full bg-green-400" title="Online"></span>
           `}
           <div ref=${menuRef} class="relative">

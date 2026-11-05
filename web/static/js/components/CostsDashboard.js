@@ -219,7 +219,7 @@ export function CostsDashboard() {
           <!-- Cost by type -->
           <div class="bg-wa-bg rounded-xl border border-wa-border p-4">
             <div class="text-[13px] font-medium text-wa-text mb-3">Custo por tipo de chamada</div>
-            <div class="grid grid-cols-3 gap-3">
+            <div class="grid grid-cols-1 sm:grid-cols-3 gap-3">
               ${['text', 'audio', 'image'].map(type => {
                 const data = (summary.by_type || {})[type] || { cost_usd: 0, prompt_tokens: 0, completion_tokens: 0, total_tokens: 0, call_count: 0 };
                 return html`
@@ -250,7 +250,8 @@ export function CostsDashboard() {
               class="w-full wa-field border border-wa-border rounded-lg px-3 py-2 text-[13px] outline-none focus:border-wa-teal transition-colors"
             />
           </div>
-          <table class="w-full text-[13px]">
+          <div class="overflow-x-auto wa-scrollbar">
+          <table class="costs-table w-full text-[13px]">
             <thead>
               <tr class="bg-wa-panel border-b border-wa-border">
                 <th
@@ -309,6 +310,7 @@ export function CostsDashboard() {
               `)}
             </tbody>
           </table>
+          </div>
         </div>
       `}
     </div>
@@ -346,7 +348,7 @@ function ContactRow({ contact: c, usdBrlRate, typeLabel }) {
     ${expanded ? html`
       <tr class="bg-wa-panel">
         <td colspan="7" class="px-4 py-3">
-          <div class="grid grid-cols-3 gap-2 text-[12px]">
+          <div class="grid grid-cols-1 sm:grid-cols-3 gap-2 text-[12px]">
             ${['text', 'audio', 'image'].map(type => {
               const data = (c.by_type || {})[type] || { cost_usd: 0, prompt_tokens: 0, completion_tokens: 0, total_tokens: 0, call_count: 0 };
               return html`

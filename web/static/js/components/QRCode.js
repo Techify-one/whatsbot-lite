@@ -29,10 +29,10 @@ export function ConnectionStatus({ connected, botPhone, botName, gowaVersion, go
   }
 
   return html`
-    <div class="rounded-xl px-4 py-3 flex items-center justify-between border shadow-sm ${connected ? 'bg-green-50 border-green-200' : 'bg-red-50 border-red-200'}">
-      <div class="flex items-center gap-3">
-        <span class="w-2.5 h-2.5 rounded-full ${connected ? 'bg-green-500' : 'bg-red-500 animate-pulse'}"></span>
-        <div class="flex items-center gap-2 text-sm">
+    <div class="rounded-xl px-4 py-3 flex flex-wrap items-center justify-between gap-3 border shadow-sm ${connected ? 'bg-green-50 border-green-200' : 'bg-red-50 border-red-200'}">
+      <div class="flex items-center gap-3 min-w-0">
+        <span class="w-2.5 h-2.5 rounded-full shrink-0 ${connected ? 'bg-green-500' : 'bg-red-500 animate-pulse'}"></span>
+        <div class="flex flex-wrap items-center gap-2 text-sm min-w-0">
           <span class="font-semibold ${connected ? 'text-green-700' : 'text-red-700'}">
             ${connected ? 'Conectado' : 'Desconectado'}
           </span>
@@ -63,7 +63,7 @@ export function ConnectionStatus({ connected, botPhone, botName, gowaVersion, go
           ` : null}
         </div>
       </div>
-      <div class="flex items-center gap-2">
+      <div class="flex flex-wrap items-center gap-2">
         <button
           onClick=${() => reconnect()}
           class="px-3 py-1.5 bg-wa-teal hover:bg-wa-tealDark text-white text-xs rounded-lg transition-colors"

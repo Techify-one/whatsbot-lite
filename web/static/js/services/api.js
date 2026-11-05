@@ -1,5 +1,5 @@
 /**
- * REST API client for WhatsBot-Lite backend.
+ * REST API client for Whatsbot-lite backend.
  */
 
 const BASE = '';
@@ -498,7 +498,7 @@ export async function skipGowaVersion(version) {
   return request('POST', '/api/gowa/skip-version', { version });
 }
 
-// "Agora não" on the modal for the version the WhatsBot-Lite release recommends.
+// "Agora não" on the modal for the version the Whatsbot-lite release recommends.
 export async function skipRecommendedGowa(version) {
   return request('POST', '/api/gowa/skip-recommended', { version });
 }

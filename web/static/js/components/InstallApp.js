@@ -24,17 +24,20 @@ export function InstallApp() {
         : 'Use o menu do navegador para instalar, se essa opção estiver disponível.');
   }
 
+  // Already running as the installed app, or on a computer: nothing to install here.
+  if (state.standalone || !state.mobile) return null;
+
   return html`
     <button type="button" class="pwa-menu-button" onClick=${() => { setMessage(''); dialog.current.showModal(); }}>
       <span aria-hidden="true">↓</span>
-      ${state.installed ? 'App instalado' : 'Instalar no celular'}
+      ${state.installed || state.installedElsewhere ? 'Abrir o app instalado' : 'Instalar no celular'}
     </button>
     <dialog ref=${dialog} class="pwa-dialog" aria-labelledby="pwa-install-title">
-      <h2 id="pwa-install-title">${state.installed ? 'WhatsBot-Lite instalado' : 'Instalar WhatsBot-Lite'}</h2>
-      ${state.installed
-        ? html`<p>${state.standalone ? 'Você já está usando o app instalado.' : 'Instalação concluída. Abra o WhatsBot-Lite pelo ícone na tela inicial.'}</p>`
+      <h2 id="pwa-install-title">${state.installed || state.installedElsewhere ? 'Whatsbot-lite instalado' : 'Instalar Whatsbot-lite'}</h2>
+      ${state.installed || state.installedElsewhere
+        ? html`<p>O Whatsbot-lite já está instalado neste celular. Abra-o pelo ícone na tela inicial para usar em tela cheia.</p>`
         : !state.secure
-          ? html`<p>Abra o endereço HTTPS do seu WhatsBot-Lite para instalar no celular. Um endereço HTTP da rede local não permite a instalação completa.</p>`
+          ? html`<p>Abra o endereço HTTPS do seu Whatsbot-lite para instalar no celular. Um endereço HTTP da rede local não permite a instalação completa.</p>`
           : html`
               ${state.ios
                 ? html`<p>No iPhone ou iPad, abra este endereço no Safari, toque em Compartilhar e em <strong>Adicionar à Tela de Início</strong>. Se aparecer, mantenha <strong>Abrir como App da Web</strong> ativado e toque em Adicionar.</p>`
@@ -42,7 +45,7 @@ export function InstallApp() {
               ${state.canPrompt ? html`<button type="button" class="pwa-primary" disabled=${busy} onClick=${install}>${busy ? 'Aguarde…' : 'Instalar agora'}</button>` : null}
               ${state.registrationFailed ? html`<p>Não foi possível preparar a instalação. Verifique a conexão e recarregue a página.</p>` : null}
             `}
-      <p class="pwa-note">É preciso ter internet e manter o servidor WhatsBot-Lite ligado. A instalação não transfere o bot para o celular nem habilita notificações com o app fechado. O login pode ser solicitado novamente.</p>
+      <p class="pwa-note">É preciso ter internet e manter o servidor Whatsbot-lite ligado. A instalação não transfere o bot para o celular nem habilita notificações com o app fechado. O login pode ser solicitado novamente.</p>
       <p role="status" aria-live="polite">${message}</p>
       <form method="dialog"><button class="pwa-close">Fechar</button></form>
     </dialog>

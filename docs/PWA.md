@@ -1,8 +1,28 @@
 # PWA do WhatsBot-Lite
 
-Identidade no aparelho: "WhatsBot Lite" (curto: "Lite"), ícone verde com selo "LITE". O WhatsBot-Pro tem
-identidade própria (azul-petróleo, selo "PRO"), então os dois podem ser instalados lado a lado. Os ícones são
-gerados por `tools/generate_pwa_icons.py --variant lite` (precisa de Pillow, só em desenvolvimento).
+Identidade no aparelho: nome exatamente "Whatsbot-lite" (manifest `name`/`short_name`, `<title>`, título
+dinâmico, notificações) e ícone verde com selo "LITE". O Whatsbot-pro tem identidade própria (selo "PRO"), então os
+dois podem ser instalados lado a lado.
+
+**Ícones:** a arte final é `tools/icon-src/icon.png`; `python tools/generate_pwa_icons.py` (precisa de Pillow, só em
+desenvolvimento) apenas redimensiona, sem redesenhar, e gera em `web/static/icons/`: `icon-192/512` (cantos
+transparentes), `maskable-512` (fundo verde sólido + arte a 70%, para o Android não cortar o "W" nem o selo),
+`apple-touch-icon` (opaco, iOS não tem alpha) e `favicon-32/48.png` + `favicon.ico` (aba do navegador, também servido
+em `/favicon.ico`). Os `<link>`/manifest levam `?v=2`: suba o número ao trocar a arte (o `StaticFiles` do lite não
+força revalidação). Um app já instalado só troca o ícone quando o Chrome revalida o manifest; no Android pode ser
+preciso desinstalar e instalar de novo. Ao mudar o texto de `offline.html`, suba a versão do cache em `sw.js`.
+
+**Instalação:** `pwa.js` expõe `isMobileDevice()` (userAgentData → UA), `installPromptDue()` e
+`getInstalledRelatedApps` (só Chrome/Android; o manifest declara `related_applications` apontando para ele mesmo).
+`InstallPrompt.js` abre o pop-up 1x por sessão (`sessionStorage`) e "Agora não" adia 7 dias (`localStorage`); o item
+"Instalar no celular" (`InstallApp.js`) não é renderizado em modo standalone nem em computador. Nenhum navegador
+permite abrir um PWA instalado por script: com o app já instalado o pop-up só orienta a abrir pelo ícone. iOS/Firefox
+não informam se está instalado.
+
+**Teclado e altura:** `interactive-widget=resizes-content` no viewport + `utils/viewport.js`, que mantém `--app-h` =
+`visualViewport.height` e cancela a rolagem que empurrava o cabeçalho para fora; a raiz usa
+`height: var(--app-h, 100dvh)`. **Seleção de texto:** em `display-mode: standalone` o toque longo não seleciona texto
+(campos, `pre/code` e `.select-text` continuam selecionáveis).
 
 **Notificações:** com o worker ativo, `showBrowserNotification` usa `registration.showNotification` (exigido pelo
 Android em PWA instalado) e o worker trata `notificationclick`. Notificação com o app fechado (push) continua

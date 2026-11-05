@@ -1,7 +1,7 @@
 // Decisions for the two automatic GOWA modals, kept free of DOM, network and
 // Preact so tests/gowa-prompt.test.cjs can exercise them with plain node.
 //
-//  * "recommended": the WhatsBot-Lite release recommends a GOWA newer than the
+//  * "recommended": the Whatsbot-lite release recommends a GOWA newer than the
 //    one installed. Decided from local data only (GET /api/gowa/version).
 //  * "compat": the release analyzer says a newer upstream GOWA fixes a
 //    WhatsApp compatibility problem (GET /api/gowa/update/check, slow).

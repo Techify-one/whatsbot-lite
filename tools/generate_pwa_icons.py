@@ -1,81 +1,91 @@
-"""Generate the WhatsBot PWA icon set (development only; needs Pillow).
+"""Generate the PWA / favicon icon set from the supplied artwork (development only; needs Pillow).
 
 Usage:
-    python tools/generate_pwa_icons.py            # Lite (default)
-    python tools/generate_pwa_icons.py --variant pro
+    python tools/generate_pwa_icons.py [--src tools/icon-src/icon.png] [--out web/static/icons]
 
-Each variant has its own colour and corner badge so the two apps are easy to tell
-apart on a phone home screen. Outputs go to web/static/icons/.
+The source is the finished app icon (rounded green square with the "W" bubble and the
+LITE/PRO badge, transparent corners). This script does NOT redraw anything: it only
+cleans the faint halo pixels, crops to the artwork, squares it and resizes.
+
+Outputs (web/static/icons/):
+    icon-192.png, icon-512.png   "any" icons, artwork edge to edge, transparent corners
+    maskable-512.png             Android adaptive icon: opaque gradient background sampled from
+                                 the artwork + artwork at MASKABLE_SCALE so the badge stays
+                                 inside the 80% safe circle
+    apple-touch-icon.png (180)   iOS has no alpha (transparent becomes black): opaque background
+    favicon-32.png, favicon-48.png, favicon.ico   browser-tab icons (transparent corners)
 """
 import argparse
 from pathlib import Path
 
-from PIL import Image, ImageDraw, ImageFont
+from PIL import Image, ImageChops
 
-VARIANTS = {
-    # background, bubble dots/badge text colour, badge label
-    "lite": {"bg": "#008069", "ink": "#008069", "badge": "LITE", "badge_bg": "#ffffff"},
-    "pro": {"bg": "#0b3c5d", "ink": "#0b3c5d", "badge": "PRO", "badge_bg": "#f5b700"},
-}
-CANVAS = 1024
+ROOT = Path(__file__).resolve().parents[1]
+ALPHA_FLOOR = 16          # alpha below this is rendering halo, not artwork
+MASKABLE_SCALE = 0.70     # badge corner sits ~0.55 from centre; 0.55*0.70 < 0.40 safe radius
+SUPERSAMPLE = 1024
 
 
-def _font(size: int) -> ImageFont.FreeTypeFont:
-    for name in ("DejaVuSans-Bold.ttf", "Arial Bold.ttf", "arialbd.ttf"):
-        try:
-            return ImageFont.truetype(name, size)
-        except OSError:
-            continue
-    return ImageFont.load_default(size)
+def load_artwork(src: Path) -> Image.Image:
+    """Return the artwork cropped to its opaque bounding box and padded to a square."""
+    image = Image.open(src).convert("RGBA")
+    alpha = image.getchannel("A").point(lambda v: 0 if v < ALPHA_FLOOR else v)
+    image.putalpha(alpha)
+    box = alpha.point(lambda v: 255 if v else 0).getbbox()
+    if not box:
+        raise SystemExit(f"{src}: image is fully transparent")
+    image = image.crop(box)
+    side = max(image.size)
+    square = Image.new("RGBA", (side, side), (0, 0, 0, 0))
+    square.paste(image, ((side - image.width) // 2, (side - image.height) // 2), image)
+    return square.resize((SUPERSAMPLE, SUPERSAMPLE), Image.Resampling.LANCZOS)
 
 
-def draw_icon(variant: dict, scale: float) -> Image.Image:
-    """Opaque full-bleed square. `scale` shrinks the artwork toward the centre:
-    1.0 for regular icons, ~0.78 for maskable so it survives any mask shape."""
-    image = Image.new("RGB", (CANVAS, CANVAS), variant["bg"])
-    layer = Image.new("RGBA", (CANVAS, CANVAS), (0, 0, 0, 0))
-    draw = ImageDraw.Draw(layer)
-    # Chat bubble, nudged up to leave room for the badge.
-    draw.rounded_rectangle((270, 230, 754, 590), radius=100, fill="white")
-    draw.polygon([(320, 555), (320, 660), (450, 555)], fill="white")
-    for x in (385, 512, 639):
-        draw.ellipse((x - 34, 380, x + 34, 448), fill=variant["ink"])
-    # Badge pill.
-    pill = (332, 705, 692, 825)
-    draw.rounded_rectangle(pill, radius=60, fill=variant["badge_bg"])
-    font = _font(84)
-    box = draw.textbbox((0, 0), variant["badge"], font=font)
-    tx = (pill[0] + pill[2]) / 2 - (box[0] + box[2]) / 2
-    ty = (pill[1] + pill[3]) / 2 - (box[1] + box[3]) / 2
-    draw.text((tx, ty), variant["badge"], font=font, fill=variant["ink"])
-    if scale != 1.0:
-        size = round(CANVAS * scale)
-        layer = layer.resize((size, size), Image.Resampling.LANCZOS)
-        framed = Image.new("RGBA", (CANVAS, CANVAS), (0, 0, 0, 0))
-        offset = (CANVAS - size) // 2
-        framed.paste(layer, (offset, offset))
-        layer = framed
-    image.paste(layer, (0, 0), layer)
-    return image
+def _sample(art: Image.Image, fx: float, fy: float) -> tuple[int, int, int]:
+    """Average colour of a small opaque patch of the artwork around (fx, fy)."""
+    size = art.width
+    cx, cy, r = int(fx * size), int(fy * size), size // 60
+    patch = art.crop((cx - r, cy - r, cx + r, cy + r)).convert("RGB").resize((1, 1), Image.Resampling.BOX)
+    return patch.getpixel((0, 0))
+
+
+def gradient_background(art: Image.Image, size: int) -> Image.Image:
+    """Opaque diagonal gradient from the artwork's own top-left to bottom-right greens."""
+    start, end = _sample(art, 0.14, 0.14), _sample(art, 0.86, 0.86)
+    vertical = Image.linear_gradient("L").resize((size, size), Image.Resampling.BICUBIC)
+    horizontal = vertical.transpose(Image.Transpose.ROTATE_90)  # black left -> white right
+    ramp = ImageChops.add(horizontal, vertical, scale=2)  # 0 at top-left -> 255 at bottom-right
+    return Image.composite(Image.new("RGB", (size, size), end), Image.new("RGB", (size, size), start), ramp)
+
+
+def resized(art: Image.Image, size: int) -> Image.Image:
+    return art.resize((size, size), Image.Resampling.LANCZOS)
+
+
+def opaque(art: Image.Image, size: int, scale: float) -> Image.Image:
+    base = gradient_background(art, size)
+    inner = round(size * scale)
+    layer = resized(art, inner)
+    offset = (size - inner) // 2
+    base.paste(layer, (offset, offset), layer)
+    return base
 
 
 def main() -> None:
     parser = argparse.ArgumentParser()
-    parser.add_argument("--variant", choices=sorted(VARIANTS), default="lite")
-    parser.add_argument("--out", type=Path, default=Path(__file__).resolve().parents[1] / "web/static/icons")
+    parser.add_argument("--src", type=Path, default=ROOT / "tools/icon-src/icon.png")
+    parser.add_argument("--out", type=Path, default=ROOT / "web/static/icons")
     args = parser.parse_args()
-    variant = VARIANTS[args.variant]
+    art = load_artwork(args.src)
     args.out.mkdir(parents=True, exist_ok=True)
-    regular = draw_icon(variant, 1.0)
-    maskable = draw_icon(variant, 0.78)
-    for filename, source, size in [
-        ("icon-192.png", regular, 192),
-        ("icon-512.png", regular, 512),
-        ("maskable-512.png", maskable, 512),
-        ("apple-touch-icon.png", regular, 180),
-    ]:
-        source.resize((size, size), Image.Resampling.LANCZOS).save(args.out / filename)
-    print(f"{args.variant}: icons written to {args.out}")
+    resized(art, 192).save(args.out / "icon-192.png", optimize=True)
+    resized(art, 512).save(args.out / "icon-512.png", optimize=True)
+    opaque(art, 512, MASKABLE_SCALE).save(args.out / "maskable-512.png", optimize=True)
+    opaque(art, 180, 1.0).save(args.out / "apple-touch-icon.png", optimize=True)
+    resized(art, 32).save(args.out / "favicon-32.png", optimize=True)
+    resized(art, 48).save(args.out / "favicon-48.png", optimize=True)
+    resized(art, 256).save(args.out / "favicon.ico", sizes=[(16, 16), (32, 32), (48, 48)])
+    print(f"icons written to {args.out}")
 
 
 if __name__ == "__main__":

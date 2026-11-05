@@ -214,7 +214,7 @@ export function SetupWizard({ status, qrAvailable, qrVersion, config, onComplete
       <div class="flex flex-col items-center text-center">
         <h2 class="text-xl font-bold text-wa-text mb-1">Conecte seu WhatsApp</h2>
         <p class="text-sm text-wa-secondary mb-4">
-          Escaneie o código abaixo para o WhatsBot-Lite atender no seu número.
+          Escaneie o código abaixo para o Whatsbot-lite atender no seu número.
         </p>
         <div class="w-[248px] h-[248px] flex items-center justify-center bg-wa-panel border-2 border-wa-border rounded-2xl overflow-hidden mb-3">
           ${status.connected ? html`
@@ -526,7 +526,7 @@ export function SetupWizard({ status, qrAvailable, qrVersion, config, onComplete
           ` : null}
 
           <div class="text-center mb-1">
-            <h1 class="text-2xl font-bold text-wa-teal">Bem-vindo ao WhatsBot-Lite</h1>
+            <h1 class="text-2xl font-bold text-wa-teal">Bem-vindo ao Whatsbot-lite</h1>
             <p class="text-sm text-wa-secondary">Vamos configurar em 4 passos rápidos</p>
           </div>
           <div class="mt-5">

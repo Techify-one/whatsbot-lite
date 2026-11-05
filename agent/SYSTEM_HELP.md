@@ -12,7 +12,7 @@ Ao responder:
 
 ## Instalar no Android ou iPhone
 
-Abra o [WhatsBot-Lite]({{base_url}}/) pelo endereço HTTPS da sua instalação. Depois de entrar e concluir a configuração inicial, abra a engrenagem no canto superior direito e escolha **Instalar no celular**.
+Abra o [Whatsbot-lite]({{base_url}}/) pelo endereço HTTPS da sua instalação no navegador do celular. Ao entrar, o sistema oferece instalar o app (**Instalar agora**); se preferir, toque em **Agora não** e ele só volta a perguntar depois de 7 dias. Também é possível abrir a engrenagem no canto superior direito e escolher **Instalar no celular**. Se o app já estiver instalado, o aviso pede para abri-lo pelo ícone na tela inicial. Dentro do app instalado, e no computador, essa opção não aparece.
 
 - **Android:** use o Chrome. Quando disponível, toque em **Instalar agora** e confirme no navegador. Também pode usar o menu do Chrome → **Instalar app** ou **Adicionar à tela inicial**.
 - **iPhone/iPad:** abra no Safari, toque em **Compartilhar → Adicionar à Tela de Início**. Se houver a opção **Abrir como App da Web**, deixe ativada e toque em **Adicionar**.
@@ -283,7 +283,7 @@ A ajuda do sistema não cria plugins. No **Chat**, clique no botão **+** no top
 
 ### Instalar, configurar ou consultar plugins
 
-A página **Plugins** lista os plugins instalados. Nela é possível importar um arquivo de plugin, ativar, desativar, configurar, exportar ou remover um plugin. As opções exatas dependem de cada plugin.
+A página **Plugins** lista os plugins instalados em cartões. Em cada cartão, a chave liga ou desliga o plugin e o botão **Configurar** abre as opções dele; o menu **⋯** traz **Exportar**, **Atualizar** (envia um novo arquivo .zip mantendo os dados) e **Deletar**. No topo, **Importar (.zip)** instala um plugin e **Loja de Plugins** abre o catálogo. As opções exatas dependem de cada plugin.
 
 [Abrir plugins]({{base_url}}/plugins)
 

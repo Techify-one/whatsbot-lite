@@ -229,8 +229,8 @@ export function ToolsManager() {
         : tools.length === 0
           ? html`<div class="text-wa-secondary">Nenhuma tool registrada.</div>`
           : html`
-            <div class="bg-wa-bg border border-wa-border rounded-lg overflow-hidden">
-              <table class="w-full text-[13px]">
+            <div class="bg-wa-bg border border-wa-border rounded-lg overflow-x-auto">
+              <table class="tools-table w-full text-[13px]">
                 <thead class="bg-wa-panel border-b border-wa-border text-wa-secondary text-[12px] uppercase tracking-wide">
                   <tr>
                     <th class="text-left px-3 py-2 font-medium">Nome</th>

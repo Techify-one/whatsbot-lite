@@ -8,7 +8,7 @@
  */
 
 const KEYS = {
-  tab: 'whatsbot_notif_tab',         // browser-tab unread badge "(N) WhatsBot-Lite"
+  tab: 'whatsbot_notif_tab',         // browser-tab unread badge "(N) Whatsbot-lite"
   browser: 'whatsbot_notif_browser', // desktop/browser notifications
   sound: 'whatsbot_notif_sound',     // play a sound on new message
 };

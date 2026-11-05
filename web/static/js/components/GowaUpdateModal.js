@@ -15,7 +15,7 @@ const PHASE_LABELS = {
 };
 
 export function GowaUpdateModal({
-  // 'recommended': the WhatsBot-Lite release recommends this GOWA (decided
+  // 'recommended': the Whatsbot-lite release recommends this GOWA (decided
   // locally, never obligatory). 'compat': the release analyzer found a
   // WhatsApp compatibility reason in a newer upstream GOWA.
   mode = 'compat',
@@ -85,7 +85,7 @@ export function GowaUpdateModal({
 
         ${recommended ? html`
           <p class="text-sm text-wa-text mb-3 leading-relaxed">
-            O WhatsBot-Lite foi atualizado e recomenda a versão
+            O Whatsbot-lite foi atualizado e recomenda a versão
             <span class="font-mono font-semibold text-wa-teal">${latestVersion}</span>
             do motor do WhatsApp (GOWA).
           </p>
@@ -138,7 +138,7 @@ export function GowaUpdateModal({
 
         ${!supported ? html`
           <div class="mb-4 p-3 rounded-lg bg-amber-50 border border-amber-300 text-amber-800 text-xs leading-relaxed">
-            <strong>Versão não homologada.</strong> O WhatsBot-Lite não foi testado com
+            <strong>Versão não homologada.</strong> O Whatsbot-lite não foi testado com
             ela e a atualização pode quebrar o envio e o recebimento de mensagens.
             Se algo der errado, use o botão Reverter em Configurações.
           </div>

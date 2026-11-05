@@ -71,7 +71,7 @@ test('activation only cleans this worker own outdated caches', async () => {
     await sw.lifecycle('activate');
     assert.deepEqual(sw.deleted, ['whatsbot-pwa-offline-v0']);
     assert.equal(sw.stores.has('other-application'), true);
-    assert.equal(sw.stores.has('whatsbot-pwa-offline-v1'), true);
+    assert.equal(sw.stores.has('whatsbot-pwa-offline-v2'), true);
 });
 
 test('API/auth/media/assets/non-GET/cross-origin/Authorization bypass interception', async () => {

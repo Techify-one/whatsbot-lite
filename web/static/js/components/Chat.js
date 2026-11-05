@@ -3,6 +3,7 @@ import { useEffect, useMemo, useRef, useState } from 'preact/hooks';
 import htm from 'htm';
 import { authHeaders } from '../services/api.js';
 import { MicIcon, StopIcon } from './contacts/icons.js';
+import { ModelPicker } from './ModelSelect.js';
 
 const html = htm.bind(h);
 
@@ -106,8 +107,8 @@ function statusLabel(name) {
     read_file: 'Lendo arquivo', list_files: 'Listando arquivos', search_content: 'Pesquisando no projeto',
     write_file: 'Criando arquivo', edit_file: 'Editando arquivo', move_file: 'Movendo arquivo',
     delete_file: 'Excluindo arquivo', run_command: 'Executando comando',
-    read_whatsbot_file: 'Consultando o WhatsBot-Lite', list_whatsbot_files: 'Listando referências',
-    search_whatsbot: 'Pesquisando no WhatsBot-Lite',
+    read_whatsbot_file: 'Consultando o Whatsbot-lite', list_whatsbot_files: 'Listando referências',
+    search_whatsbot: 'Pesquisando no Whatsbot-lite',
   };
   return labels[name] || name || 'Executando ação';
 }
@@ -716,7 +717,7 @@ export function Chat() {
           else if (evt.event === 'metrics') setMessages(prev => [...prev, payload]);
           else if (evt.event === 'message' || evt.event === 'message_saved') { setStreaming(''); setMessages(prev => [...prev, payload]); }
           else if (evt.event === 'install_ready') setInstallReady(payload);
-          else if (evt.event === 'install_completed') setNotice(`${payload.message} O WhatsBot-Lite será reiniciado.`);
+          else if (evt.event === 'install_completed') setNotice(`${payload.message} O Whatsbot-lite será reiniciado.`);
           else if (evt.event === 'validation_failed') setNotice(`O plugin ainda não passou na validação: ${payload.error}`);
           else if (evt.event === 'compacted') setNotice('O contexto foi compactado automaticamente.');
           else if (evt.event === 'conversation_updated') setConversation(prev => ({ ...prev, title: payload.title }));
@@ -748,7 +749,7 @@ export function Chat() {
     setInstalling(true);
     try {
       const result = await api('POST', `/api/chat/projects/${projectId}/install`, { conversation_id: conversationId });
-      setNotice(result.message + (result.restarting ? ' O WhatsBot-Lite será reiniciado.' : ''));
+      setNotice(result.message + (result.restarting ? ' O Whatsbot-lite será reiniciado.' : ''));
       setInstallReady(null);
       setMessages(previous => [
         ...previous.map(message => message.kind === 'install_offer'
@@ -758,7 +759,7 @@ export function Chat() {
           id: `install-${Date.now()}`,
           role: 'assistant',
           kind: 'message',
-          content: `${result.message} O WhatsBot-Lite será reiniciado para carregar o plugin.`,
+          content: `${result.message} O Whatsbot-lite será reiniciado para carregar o plugin.`,
         },
       ]);
     } catch (error) { setNotice(error.message); }
@@ -768,7 +769,7 @@ export function Chat() {
   async function rollback() {
     try {
       const result = await api('POST', `/api/chat/projects/${projectId}/rollback`, {});
-      setNotice(`Backup restaurado (v${result.version}). O WhatsBot-Lite será reiniciado.`);
+      setNotice(`Backup restaurado (v${result.version}). O Whatsbot-lite será reiniciado.`);
     } catch (error) { setNotice(error.message); }
   }
 
@@ -796,8 +797,8 @@ export function Chat() {
       <aside id="chat-project-sidebar" class="chat-sidebar w-72 shrink-0 flex flex-col ${mobileSidebarOpen ? 'is-mobile-open' : ''}">
         <div class="chat-sidebar-head p-4">
           <div class="flex items-center gap-3">
-            <a href="/" class="chat-icon-button" title="Voltar ao WhatsBot-Lite" aria-label="Voltar ao WhatsBot-Lite">←</a>
-            <div class="min-w-0 flex-1"><div class="font-semibold text-[15px]">Chat</div><div class="text-[11px] opacity-70">WhatsBot-Lite + Criador de Plugins</div></div>
+            <a href="/" class="chat-icon-button" title="Voltar ao Whatsbot-lite" aria-label="Voltar ao Whatsbot-lite">←</a>
+            <div class="min-w-0 flex-1"><div class="font-semibold text-[15px]">Chat</div><div class="text-[11px] opacity-70">Whatsbot-lite + Criador de Plugins</div></div>
             <button onClick=${() => setShowNew(!showNew)} class="chat-icon-button" title="Novo plugin" aria-label="Novo plugin">＋</button>
             <button type="button" onClick=${() => setMobileSidebarOpen(false)} class="chat-icon-button chat-mobile-close" title="Fechar projetos" aria-label="Fechar projetos">×</button>
           </div>
@@ -852,7 +853,7 @@ export function Chat() {
           >
             <svg viewBox="0 0 24 24" width="21" height="21" fill="currentColor" aria-hidden="true"><path d="M4 6h16v2H4V6zm0 5h16v2H4v-2zm0 5h16v2H4v-2z"/></svg>
           </button>
-          <div class="chat-topbar-title min-w-0 mr-auto"><div class="font-semibold truncate">${conversation ? conversation.title : project ? project.name : 'Chat'}</div><div class="text-[11px] text-wa-secondary truncate">${project && project.kind === 'plugin' ? `Projeto ${project.plugin_id}` : 'Ajuda e configuração do WhatsBot-Lite'}</div></div>
+          <div class="chat-topbar-title min-w-0 mr-auto"><div class="font-semibold truncate">${conversation ? conversation.title : project ? project.name : 'Chat'}</div><div class="text-[11px] text-wa-secondary truncate">${project && project.kind === 'plugin' ? `Projeto ${project.plugin_id}` : 'Ajuda e configuração do Whatsbot-lite'}</div></div>
           ${project && project.kind === 'plugin' ? html`<button onClick=${() => { setShowFiles(!showFiles); loadFiles(); }} class="chat-secondary-button">▱ Arquivos</button>` : null}
           ${installedProjectPlugin && installedProjectPlugin.load_error ? html`<button onClick=${rollback} class="chat-danger-button" title=${installedProjectPlugin.load_error}>Restaurar</button>` : null}
         </header>
@@ -860,7 +861,7 @@ export function Chat() {
         <div class="flex-1 min-h-0 flex">
           <div class="chat-transcript flex-1 min-w-0 overflow-auto wa-scrollbar p-4 md:p-6">
             <div class="max-w-3xl mx-auto">
-              ${!conversation ? html`<div class="h-full min-h-64 flex flex-col items-center justify-center text-center text-wa-secondary"><div class="text-4xl mb-3">✦</div><div class="text-lg text-wa-text">${project ? 'Crie ou abra uma conversa' : 'Escolha um projeto'}</div><div class="text-sm mt-2 max-w-md">Pergunte como configurar o WhatsBot-Lite ou descreva o plugin que deseja criar.</div></div>` : html`<${MessageList} messages=${messages} streaming=${streaming} running=${running} projectId=${projectId} conversationId=${conversationId} linkedMessageId=${linkedMessageId} onMessageLink=${openMessageLink} />`}
+              ${!conversation ? html`<div class="h-full min-h-64 flex flex-col items-center justify-center text-center text-wa-secondary"><div class="text-4xl mb-3">✦</div><div class="text-lg text-wa-text">${project ? 'Crie ou abra uma conversa' : 'Escolha um projeto'}</div><div class="text-sm mt-2 max-w-md">Pergunte como configurar o Whatsbot-lite ou descreva o plugin que deseja criar.</div></div>` : html`<${MessageList} messages=${messages} streaming=${streaming} running=${running} projectId=${projectId} conversationId=${conversationId} linkedMessageId=${linkedMessageId} onMessageLink=${openMessageLink} />`}
               ${running && status ? html`<div class="text-xs text-wa-secondary animate-pulse my-2">${status}</div>` : null}
               ${installReady ? html`<div class="my-4 p-4 rounded-xl border border-wa-teal/40 bg-wa-bg shadow-sm">
                 <div class="font-medium">${installReady.installed ? 'Plugin validado. Quer atualizar o plugin instalado?' : 'Plugin pronto. Quer instalar?'}</div>
@@ -903,12 +904,10 @@ export function Chat() {
               } else if (e.key === 'Enter' && !e.shiftKey) {
                 e.preventDefault(); send();
               }
-            }} placeholder=${project && project.kind === 'system' ? 'Pergunte sobre o WhatsBot-Lite…' : 'Descreva o plugin ou a alteração…'} class="chat-composer-input wa-scrollbar"></textarea>
+            }} placeholder=${project && project.kind === 'system' ? 'Pergunte sobre o Whatsbot-lite…' : 'Descreva o plugin ou a alteração…'} class="chat-composer-input wa-scrollbar"></textarea>
             <div class="chat-composer-bar">
               <div class="chat-composer-options flex min-w-0 items-center gap-1.5">
-                <select ref=${modelRef} class="chat-model-select" value=${conversation.model} disabled=${running || transcribing} onChange=${e => updateConversation({ model: e.target.value, reasoning: '' })} title="Modelo desta conversa">
-                  ${models.length ? models.map(m => html`<option value=${m.id}>${m.name || m.id}</option>`) : html`<option value=${conversation.model}>${conversation.model}</option>`}
-                </select>
+                <${ModelPicker} controlRef=${modelRef} models=${models} value=${conversation.model} disabled=${running || transcribing} onChange=${id => updateConversation({ model: id, reasoning: '' })} />
                 ${supportsReasoning ? html`<select class="chat-effort-select" value=${conversation.reasoning || ''} disabled=${running || transcribing} title="Nível de raciocínio" onChange=${e => updateConversation({ reasoning: e.target.value })}><option value="">Padrão</option><option value="low">Baixo</option><option value="medium">Médio</option><option value="high">Alto</option></select>` : null}
                 <button type="button" onClick=${testCache} disabled=${running || transcribing} class="chat-composer-tool" title="Testar cache">Cache</button>
               </div>
