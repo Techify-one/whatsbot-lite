@@ -53,3 +53,16 @@ self.addEventListener('fetch', (event) => {
         }
     })());
 });
+
+// Notifications shown through the worker (required on installed Android PWAs):
+// focus an open window or open the app. No payload is read or stored.
+self.addEventListener('notificationclick', (event) => {
+    event.notification.close();
+    event.waitUntil((async () => {
+        const wins = await self.clients.matchAll({type: 'window', includeUncontrolled: true});
+        for (const win of wins) {
+            if ('focus' in win) return win.focus();
+        }
+        if (self.clients.openWindow) return self.clients.openWindow('/');
+    })());
+});

@@ -1,5 +1,13 @@
 # PWA do WhatsBot-Lite
 
+Identidade no aparelho: "WhatsBot Lite" (curto: "Lite"), ícone verde com selo "LITE". O WhatsBot-Pro tem
+identidade própria (azul-petróleo, selo "PRO"), então os dois podem ser instalados lado a lado. Os ícones são
+gerados por `tools/generate_pwa_icons.py --variant lite` (precisa de Pillow, só em desenvolvimento).
+
+**Notificações:** com o worker ativo, `showBrowserNotification` usa `registration.showNotification` (exigido pelo
+Android em PWA instalado) e o worker trata `notificationclick`. Notificação com o app fechado (push) continua
+fora de escopo. **Notch/barras do sistema:** `viewport-fit=cover` + a classe `.app-safe-area` no contêiner raiz.
+
 ## Implantação
 
 - O app continua sendo servido pelo FastAPI na raiz do domínio (`/`). Subpastas não são suportadas pelo frontend existente.

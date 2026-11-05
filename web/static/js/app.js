@@ -709,7 +709,7 @@ function App({ onLogout, hasPassword }) {
     : null;
 
   return html`
-    <div class="h-dvh overflow-hidden flex flex-col relative">
+    <div class="h-dvh overflow-hidden flex flex-col relative app-safe-area">
       <${GearMenu} tab=${tab} onTabChange=${setTab} pluginScreens=${pluginScreens} hasPassword=${hasPassword} onLogout=${onLogout} accountUrl=${config && config.account_url} />
 
       <main class="flex-1 min-h-0 ${tab === 'chat' ? 'overflow-hidden' : 'overflow-auto'} ${tab !== 'contacts' ? 'bg-wa-panel' : ''}">

@@ -47,8 +47,22 @@ export async function requestBrowserPermission() {
 
 export function showBrowserNotification(title, body) {
   if (!browserNotifSupported() || Notification.permission !== 'granted') return;
+  const options = { body, tag: 'whatsbot-message', renotify: true, icon: '/static/icons/icon-192.png' };
+  // Android (PWA instalado) rejeita `new Notification()`; precisa do service worker.
+  const sw = typeof navigator !== 'undefined' ? navigator.serviceWorker : null;
+  if (sw && sw.getRegistration) {
+    sw.getRegistration('/').then((reg) => {
+      if (reg && reg.active && reg.showNotification) return reg.showNotification(title, options);
+      return _showPageNotification(title, options);
+    }).catch(() => _showPageNotification(title, options));
+    return;
+  }
+  _showPageNotification(title, options);
+}
+
+function _showPageNotification(title, options) {
   try {
-    const n = new Notification(title, { body, tag: 'whatsbot-message', renotify: true });
+    const n = new Notification(title, options);
     n.onclick = () => { try { window.focus(); } catch (_) {} n.close(); };
   } catch (_) { /* ignore */ }
 }
