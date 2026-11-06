@@ -1,6 +1,10 @@
 {
-  "version": "0.2.17",
+  "version": "0.2.18",
   "changelog": [
+    {
+      "version": "0.2.18",
+      "description": "- Corrige a atualização do GOWA para as versões 9.8 em diante, que voltava para a versão anterior\n- O GOWA agora é iniciado apenas para uso local neste computador\n- A atualização é cancelada de imediato, mantendo a versão atual, quando o GOWA novo não consegue iniciar\n- Melhorias de PWA e da experiência no celular"
+    },
     {
       "version": "0.2.17",
       "description": "- RELEASE TEMPORÁRIA DE TESTE: validação manual da atualização do WhatsBot Cloud de 0.2.16 para 0.2.17\n- Sem mudanças funcionais em relação à 0.2.16; apenas a versão e esta nota foram atualizadas para permitir o teste\n- Esta release será removida após o teste"
