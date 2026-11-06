@@ -510,6 +510,141 @@ check("tabela de hashes só tem sha256 minúsculo de 64 hex",
 
 
 # ═══════════════════════════════════════════════════════════════════
+section("GOWA 9.8+: sobe em loopback (sem APP_HOST ele aborta sem senha)")
+
+import os  # noqa: E402
+from unittest import mock  # noqa: E402
+from gowa import manager as gowa_manager_mod  # noqa: E402
+
+
+def _spawn_env(preset: dict[str, str] | None = None, drop: tuple[str, ...] = ("APP_HOST",)) -> dict:
+    """Run GOWAManager.start() with Popen faked and return the env it got."""
+    base = {k: v for k, v in os.environ.items() if k not in drop}
+    base.update(preset or {})
+    seen: dict = {}
+
+    def fake_popen(cmd, **kwargs):
+        seen["env"] = kwargs.get("env") or {}
+        proc = MagicMock()
+        proc.poll.return_value = None
+        proc.pid = 1234
+        return proc
+
+    with tempfile.TemporaryDirectory() as tmp:
+        mgr = gowa_manager_mod.GOWAManager(port=3999, data_dir=Path(tmp))
+        fake_bin = Path(tmp) / "gowa"
+        fake_bin.write_text("x")
+        with mock.patch.dict(os.environ, base, clear=True), \
+             mock.patch.object(gowa_manager_mod, "_get_gowa_binary", return_value=fake_bin), \
+             mock.patch.object(gowa_manager_mod.subprocess, "Popen", side_effect=fake_popen), \
+             mock.patch.object(gowa_manager_mod.threading, "Thread"):
+            mgr.start()
+    return seen.get("env", {})
+
+
+check("sem APP_HOST do operador, o GOWA recebe 127.0.0.1",
+      _spawn_env().get("APP_HOST") == "127.0.0.1")
+check("APP_HOST do operador (ex.: Docker) prevalece",
+      _spawn_env({"APP_HOST": "10.0.0.5"}).get("APP_HOST") == "10.0.0.5")
+check("APP_HOST vazio conta como não definido",
+      _spawn_env({"APP_HOST": "  "}).get("APP_HOST") == "127.0.0.1")
+check("o cliente fala com o GOWA só por 127.0.0.1 (o bind combina)",
+      "127.0.0.1" in gowa_client_mod.GOWAClient(port=3999).base_url
+      if (gowa_client_mod := __import__("gowa.client", fromlist=["GOWAClient"])) else False)
+
+# ═══════════════════════════════════════════════════════════════════
+section("Binário novo que morre ao iniciar: rollback imediato e com motivo")
+
+# Estado limpo: GOWA gerenciado 9.6.0 já instalado, tentando ir para 9.9.0.
+shutil.rmtree(gowa_binary.managed_dir(), ignore_errors=True)
+publish("9.9.0")
+
+
+class DyingManager:
+    """A 1a start() (a do binário novo) 'sobe' e morre, como o GOWA 9.8+ sem APP_HOST.
+
+    O start() do rollback não morre.
+    """
+
+    def __init__(self):
+        self.exit_count = 0
+        self.last_exit_code: int | None = None
+        self.starts = 0
+
+    def stop(self):
+        pass
+
+    def start(self):
+        self.starts += 1
+        if self.starts == 1:
+            self.last_exit_code = 1
+            self.exit_count += 1
+
+
+class DeadClient:
+    """Sem resposta enquanto só o binário novo foi iniciado; responde após o rollback."""
+
+    def __init__(self, mgr):
+        self.mgr = mgr
+
+    def health_check(self):
+        return self.mgr.starts >= 2
+
+    def get_app_info(self):
+        return None
+
+
+dying = DyingManager()
+t0 = time.monotonic()
+with mock.patch.object(gowa_updater, "_HEALTH_TIMEOUT_SEC", 45):
+    res = gowa_updater.install("9.9.0", manager=dying, client=DeadClient(dying))
+elapsed = time.monotonic() - t0
+check("install falha e reverte quando o processo morre", res["ok"] is False and res["rolled_back"] is True, str(res))
+check("o rollback religou o GOWA (2 starts)", dying.starts == 2, str(dying.starts))
+check("não espera os 45s do health check", elapsed < 15, f"{elapsed:.1f}s")
+check("a mensagem ao cliente é neutra, sem detalhe técnico",
+      res.get("message") == gowa_updater._GENERIC_UPDATE_FAILURE
+      and "gowa.log" not in res.get("message", "")
+      and "DEBUG" not in res.get("message", ""),
+      res.get("message", ""))
+
+# Sem sinal de morte (MagicMock/atributos ausentes) o comportamento antigo se mantém.
+check("_process_died ignora manager sem contador", gowa_updater._process_died(MagicMock(), 0) is False)
+check("_process_died ignora exits_before desconhecido", gowa_updater._process_died(dying, None) is False)
+check("_process_died detecta saída nova", gowa_updater._process_died(dying, dying.exit_count - 1) is True)
+
+# ═══════════════════════════════════════════════════════════════════
+section("Teste de fumaça: CPU antiga não executa o binário novo")
+
+import subprocess as _sp  # noqa: E402
+
+
+def _fake_run(returncode, stderr=b"", stdout=b""):
+    return mock.patch.object(
+        gowa_updater.subprocess, "run",
+        return_value=_sp.CompletedProcess([], returncode, stdout=stdout, stderr=stderr),
+    )
+
+
+def _smoke(returncode, stderr=b""):
+    try:
+        with _fake_run(returncode, stderr):
+            gowa_updater._smoke_test(Path("/x/gowa"))
+        return None
+    except gowa_updater.GowaUpdateError as exc:
+        return str(exc)
+
+
+msg = _smoke(127, b"./linux-amd64: CPU ISA level is lower than required\n")
+check("CPU sem AVX2 é recusada antes de trocar o binário, com texto neutro",
+      msg == gowa_updater._GENERIC_UPDATE_FAILURE, str(msg))
+check("--help com código 1 e texto normal passa", _smoke(1, b"unknown flag") is None)
+check("--help com código 0 passa", _smoke(0) is None)
+check("loader 127 com mensagem é recusado, sem vazar o texto do sistema",
+      _smoke(127, b"error while loading shared libraries") == gowa_updater._GENERIC_UPDATE_FAILURE)
+check("127 sem texto não é recusado (comportamento antigo)", _smoke(127, b"") is None)
+
+# ═══════════════════════════════════════════════════════════════════
 shutil.rmtree(ROOT, ignore_errors=True)
 shutil.rmtree(RELEASE, ignore_errors=True)
 

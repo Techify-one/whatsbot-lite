@@ -63,6 +63,11 @@ _VERSION_RE = re.compile(r"^\d+\.\d+\.\d+$")
 
 _UA = "WhatsBot"
 
+# What the panel shows when an update cannot proceed for a technical reason
+# (CPU too old, new binary exiting on startup...). The real reason goes to the
+# server log only: end users get no technical detail.
+_GENERIC_UPDATE_FAILURE = "Não foi possível atualizar o GOWA agora. A versão atual foi mantida."
+
 # GOWA writes the WhatsApp session here (NOT storages/whatsbot.db, which is
 # ours). A major upgrade can migrate this schema irreversibly, so we snapshot it
 # before crossing a major boundary or the rollback button would be theatre.
@@ -643,22 +648,40 @@ def _clear_quarantine(path: Path) -> None:
 
 
 def _smoke_test(path: Path) -> None:
-    """Run the binary once to catch a wrong-architecture download.
+    """Run the binary once to prove this machine can execute it at all.
 
-    The return code is irrelevant; what matters is that the OS can execute it
-    at all, checked before we touch the binary currently in use.
+    Checked before we touch the binary currently in use. The exit code of
+    ``--help`` is irrelevant EXCEPT for the loader's own failures: a CPU older
+    than the build requires (``CPU ISA level is lower than required``, Go
+    ``GOAMD64`` / glibc) does not raise OSError, it exits 127 with that text,
+    so it has to be recognised from the output.
     """
     try:
-        subprocess.run(
+        proc = subprocess.run(
             [str(path), "--help"], capture_output=True, timeout=15, check=False,
         )
     except subprocess.TimeoutExpired:
-        pass  # It ran, it just did not exit fast. Good enough.
+        return  # It ran, it just did not exit fast. Good enough.
     except OSError as exc:
         raise GowaUpdateError(
             f"O binário baixado não executa nesta máquina ({exc}). "
             "Provavelmente é de outra arquitetura."
         ) from exc
+
+    output = (proc.stderr or b"") + (proc.stdout or b"")
+    text = output.decode("utf-8", errors="replace")
+    if "cpu isa level" in text.lower():
+        logger.error(
+            "Downloaded GOWA cannot run on this CPU (needs a newer instruction "
+            "set, e.g. AVX2): %s", text.strip()[:200],
+        )
+        raise GowaUpdateError(_GENERIC_UPDATE_FAILURE)
+    if proc.returncode in (126, 127) and text.strip():
+        logger.error(
+            "Downloaded GOWA does not execute on this machine (exit %s): %s",
+            proc.returncode, text.strip()[:200],
+        )
+        raise GowaUpdateError(_GENERIC_UPDATE_FAILURE)
 
 
 def _replace_with_retry(src: Path, dest: Path, attempts: int = 10) -> None:
@@ -719,9 +742,18 @@ def _restore_session(backup_dir: str) -> None:
 # ── Lifecycle helpers ──────────────────────────────────────────────────
 
 
-def _wait_healthy(client, timeout: int = _HEALTH_TIMEOUT_SEC) -> bool:
+def _wait_healthy(client, timeout: int = _HEALTH_TIMEOUT_SEC,
+                  manager=None, exits_before=None) -> bool:
+    """Poll the health check until ``timeout``.
+
+    With ``manager`` and ``exits_before`` (``manager.exit_count`` taken before
+    the start), gives up as soon as the process is seen dying instead of
+    waiting out the whole timeout for a binary that already exited.
+    """
     deadline = time.monotonic() + timeout
     while time.monotonic() < deadline:
+        if _process_died(manager, exits_before):
+            return False
         try:
             if client.health_check():
                 return True
@@ -729,6 +761,14 @@ def _wait_healthy(client, timeout: int = _HEALTH_TIMEOUT_SEC) -> bool:
             logger.debug("health_check raised: %s", exc)
         time.sleep(1)
     return False
+
+
+def _process_died(manager, exits_before) -> bool:
+    """True when the watchdog saw GOWA exit after ``exits_before`` exits."""
+    if manager is None or not isinstance(exits_before, int):
+        return False
+    count = getattr(manager, "exit_count", None)
+    return isinstance(count, int) and count > exits_before
 
 
 def _confirm_running_version(client) -> str:
@@ -874,11 +914,20 @@ def install(version: str, *, manager, client, on_progress=None,
         # 6. Restart and prove it is alive.
         report("restarting", 100, version)
         _set_state("running", "restarting", 100, version)
+        exits_before = getattr(manager, "exit_count", None)
         manager.start()
 
         report("health_check", 100, version)
         _set_state("running", "health_check", 100, version)
-        if not _wait_healthy(client):
+        if not _wait_healthy(client, manager=manager, exits_before=exits_before):
+            if _process_died(manager, exits_before):
+                code = getattr(manager, "last_exit_code", None)
+                logger.error(
+                    "GOWA %s exited right after starting (exit code %s); "
+                    "rolling back. Set WHATSBOT_GOWA_DEBUG=1 and read "
+                    "logs/gowa.log for the reason.", version, code,
+                )
+                raise GowaUpdateError(_GENERIC_UPDATE_FAILURE)
             raise GowaUpdateError(
                 f"O GOWA {version} não respondeu em {_HEALTH_TIMEOUT_SEC}s após a atualização."
             )

@@ -31,6 +31,14 @@ def _gowa_log_path() -> Path:
     return logs_dir / "gowa.log"
 
 
+# GOWA 9.8.0+ aborts at startup when it has no basic-auth credentials and is
+# bound to a non-loopback address (its default is 0.0.0.0). WhatsBot only ever
+# talks to it through 127.0.0.1 (see GOWAClient.base_url), so we bind it there:
+# no credentials needed, and it is no longer reachable from the network.
+# An explicit APP_HOST from the operator (e.g. Docker/Coolify) always wins.
+GOWA_BIND_ENV = "APP_HOST"
+GOWA_DEFAULT_BIND = "127.0.0.1"
+
 def _debug_enabled() -> bool:
     return os.environ.get("WHATSBOT_GOWA_DEBUG", "").strip().lower() in {"1", "true", "yes", "on"}
 
@@ -49,6 +57,10 @@ class GOWAManager:
         self._watchdog_thread: threading.Thread | None = None
         self._restart_count = 0
         self._restart_window_start = 0.0
+        # Total exits seen by the watchdog and the last exit code. Never reset,
+        # so the updater can tell "the new binary died" from "still booting".
+        self.exit_count = 0
+        self.last_exit_code: int | None = None
         self._max_restarts = 3
         self._restart_window_sec = 60
         self._on_restart = on_restart
@@ -126,6 +138,8 @@ class GOWAManager:
         # would abort on an unknown CLI flag, and argv would leak the password
         # to ``ps``. See gowa/proxy.py.
         env = os.environ.copy()
+        if not env.get(GOWA_BIND_ENV, "").strip():
+            env[GOWA_BIND_ENV] = GOWA_DEFAULT_BIND
         proxy_url = gowa_proxy.current_url()
         if proxy_url:
             env[gowa_proxy.ENV_VAR] = proxy_url
@@ -223,6 +237,8 @@ class GOWAManager:
         while self._running:
             if self._process and self._process.poll() is not None:
                 exit_code = self._process.returncode
+                self.last_exit_code = exit_code
+                self.exit_count += 1
                 logger.warning("GOWA exited with code %s", exit_code)
                 self._process = None
 
