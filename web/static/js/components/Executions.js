@@ -3,6 +3,8 @@ import { useState, useEffect, useCallback, useRef } from 'preact/hooks';
 import htm from 'htm';
 import { getExecutions, getExecution } from '../services/api.js';
 
+import nav from '../utils/navigation.js';
+
 const html = htm.bind(h);
 
 const STEP_COLORS = {
@@ -198,7 +200,7 @@ export function Executions() {
       if (!opts.skipPush) {
         const target = `/executions/${id}`;
         if (window.location.pathname !== target) {
-          history.pushState(null, '', target);
+          nav.swap(target);
         }
       }
     }
@@ -208,7 +210,7 @@ export function Executions() {
     setSelected(null);
     setSelectedData(null);
     if (window.location.pathname !== '/executions') {
-      history.pushState(null, '', '/executions');
+      nav.swap('/executions');
     }
     fetchList();
   }, [fetchList]);

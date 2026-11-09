@@ -6,6 +6,8 @@ import { ModelSelect } from './ModelSelect.js';
 import { DatabaseSettings } from './DatabaseSettings.js';
 import { GowaSettings } from './GowaSettings.js';
 
+import nav from '../utils/navigation.js';
+
 const html = htm.bind(h);
 
 const PANEL_TABS = [
@@ -264,7 +266,7 @@ export function ConfigPanel({ config, saving, onSave, onNotify }) {
     if (event.button !== 0 || event.ctrlKey || event.metaKey || event.shiftKey || event.altKey) return;
     event.preventDefault();
     setActiveTab(tabId);
-    history.pushState(null, '', panelTabHref(tabId));
+    nav.swap(panelTabHref(tabId));
     window.requestAnimationFrame(() => {
       document.getElementById('panel-tabs')?.scrollIntoView({ behavior: 'smooth', block: 'start' });
     });

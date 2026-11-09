@@ -243,6 +243,26 @@ def get_last_user_message(contact_id: int) -> dict | None:
     return _row_to_dict(row) if row else None
 
 
+def get_user_message_by_msg_id(contact_id: int, msg_id: str) -> dict | None:
+    """Return the user message carrying this GOWA ``msg_id`` (None when absent).
+
+    Used to attach an image description / transcript to the exact media row,
+    instead of "whatever user message is newest" (which may be a different one
+    when two messages land in the same cycle).
+    """
+    if not msg_id:
+        return None
+    with get_engine().connect() as conn:
+        row = conn.execute(
+            select(messages)
+            .where((messages.c.contact_id == contact_id)
+                   & (messages.c.role == "user")
+                   & (messages.c.msg_id == msg_id))
+            .order_by(messages.c.id.desc())
+            .limit(1)
+        ).mappings().first()
+    return _row_to_dict(row) if row else None
+
 def update_content(message_id: int, content: str) -> None:
     """Update the content of a specific message."""
     with get_engine().begin() as conn:

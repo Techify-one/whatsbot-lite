@@ -79,5 +79,22 @@ class PwaRoutesTest(unittest.TestCase):
         self.assertEqual([arg.id for arg in calls[0].args], ["app", "web_dir"])
 
 
+class StaticRevalidationTest(unittest.TestCase):
+    def test_static_assets_always_revalidate(self):
+        """An installed app must not run stale JS/CSS from the heuristic cache."""
+        spec = importlib.util.spec_from_file_location("static_files", ROOT / "server/static_files.py")
+        mod = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(mod)
+        app = FastAPI()
+        app.mount("/static", mod.NoCacheStaticFiles(directory=str(ROOT / "web/static")), name="static")
+        client = TestClient(app)
+        for path in ("/static/js/app.js", "/static/css/custom.css"):
+            r = client.get(path)
+            self.assertEqual(r.status_code, 200, path)
+            self.assertEqual(r.headers.get("cache-control"), "no-cache", path)
+            self.assertTrue(r.headers.get("etag"), path)
+            self.assertEqual(client.get(path, headers={"If-None-Match": r.headers["etag"]}).status_code, 304, path)
+
+
 if __name__ == "__main__":
     unittest.main()

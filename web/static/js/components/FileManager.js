@@ -8,6 +8,8 @@ import htm from 'htm';
 import { getFilesUsage, listFiles, deleteFiles, authHeaders } from '../services/api.js';
 import { ConversationPicker } from './ConversationPicker.js';
 
+import nav from '../utils/navigation.js';
+
 const html = htm.bind(h);
 
 const PAGE = 100;
@@ -109,7 +111,7 @@ function openConversation(e, origin) {
   // Modified clicks keep the browser default (new tab/window).
   if (e.button !== 0 || e.ctrlKey || e.metaKey || e.shiftKey || e.altKey) return;
   e.preventDefault();
-  history.pushState(null, '', conversationHref(origin));
+  nav.push(conversationHref(origin));
   window.dispatchEvent(new PopStateEvent('popstate'));
 }
 

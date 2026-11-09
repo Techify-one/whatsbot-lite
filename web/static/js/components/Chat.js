@@ -5,6 +5,8 @@ import { authHeaders } from '../services/api.js';
 import { MicIcon, StopIcon } from './contacts/icons.js';
 import { ModelPicker } from './ModelSelect.js';
 
+import nav from '../utils/navigation.js';
+
 const html = htm.bind(h);
 
 async function api(method, path, body) {
@@ -99,7 +101,7 @@ function chatPath(projectId = '', conversationId = '', messageId = null) {
 function navigateChat(projectId, conversationId = '', messageId = null, { replace = false } = {}) {
   const target = chatPath(projectId, conversationId, messageId);
   if (window.location.pathname === target) return;
-  history[replace ? 'replaceState' : 'pushState'](null, '', target);
+  if (replace) nav.replace(target); else nav.swap(target);
 }
 
 function statusLabel(name) {

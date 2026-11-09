@@ -1,7 +1,7 @@
 import { useEffect } from 'preact/hooks';
 import { createWebSocket } from '../services/websocket.js';
 
-export function useWebSocket({ onStatus, onQrUpdate, onGowaStatus, onConfigSaved, onNewMessage, onChatPresence, onContactInfoUpdated, onTagsChanged, onContactTagsUpdated, onHumanTransferAlert, onContactAiToggled, onMessagesRead, onMessageStatus, onMessageAction, onMessageReaction, onMediaUpdated, onAvatarUpdated, onGroupParticipantsChanged, onLowBalance, onGowaUpdateAvailable, onGowaUpdateProgress, onGowaUpdateDone, onWsConnect, onWsDisconnect }) {
+export function useWebSocket({ onStatus, onQrUpdate, onGowaStatus, onConfigSaved, onNewMessage, onChatPresence, onContactInfoUpdated, onTagsChanged, onContactTagsUpdated, onHumanTransferAlert, onContactAiToggled, onMessagesRead, onMessageStatus, onMessageAction, onMessageReaction, onMediaUpdated, onAvatarUpdated, onGroupParticipantsChanged, onLowBalance, onGowaUpdateAvailable, onGowaUpdateProgress, onGowaUpdateDone, onContactListEvent, onWsConnect, onWsDisconnect }) {
   useEffect(() => {
     const ws = createWebSocket({
       onConnect: onWsConnect,
@@ -24,6 +24,9 @@ export function useWebSocket({ onStatus, onQrUpdate, onGowaStatus, onConfigSaved
       message_reaction: onMessageReaction,
       message_media_updated: onMediaUpdated,
       avatar_updated: onAvatarUpdated,
+      contact_deleted: onContactListEvent ? (d) => onContactListEvent({ ...d, type: 'deleted' }) : undefined,
+      contact_archived: onContactListEvent ? (d) => onContactListEvent({ ...d, type: 'archived' }) : undefined,
+      contact_pinned: onContactListEvent ? (d) => onContactListEvent({ ...d, type: 'pinned' }) : undefined,
       group_participants_changed: onGroupParticipantsChanged,
       low_balance: onLowBalance,
       gowa_update_available: onGowaUpdateAvailable,

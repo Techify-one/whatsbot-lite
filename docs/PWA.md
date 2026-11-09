@@ -62,6 +62,29 @@ WhatsBot-Lite e abra novamente. Recursos e telas normais continuam vindo da rede
    privado pode aparecer.
 6. Teste cancelamento, cliques repetidos, Fechar/Escape, modo escuro e logout.
 
+## Voltar e largura no app instalado
+
+Tudo abaixo vale **só em `display-mode: standalone`**; no navegador comum os helpers não fazem nada
+(`utils/navigation.js` devolve `false` e o código chamador mantém o `pushState` de antes).
+
+- **Modelo**: cada entrada de histórico criada em standalone leva `history.state = { wbDepth: n }`; "/" (a
+  lista de contatos) é a profundidade 0. `installRootGuard()` roda no boot (`app.js`) e, numa abertura fria em
+  rota profunda (notificação, atalho), coloca a entrada "/" por baixo, de modo que o voltar do sistema nunca
+  fecha o app. Também envolve `history.pushState/replaceState` para que chamadas soltas sem state mantenham a
+  profundidade (um `replaceState(null, …)` de filtro/busca não pode apagá-la).
+- **Setas ←** (conversa, `PageHeader`, Execuções) usam `goToRoot()`/`goBack()`: andam no histórico em vez de
+  empilhar um novo "/" (era isso que exigia 2 voltas). Troca entre telas de topo (`tabNavigate`) substitui a
+  entrada em vez de empilhar; navegação dentro de uma tela (abas do Painel, projeto do Chat, detalhe de
+  execução) usa `swap()`.
+- **Overlays**: o painel de informações do contato empurra uma entrada marcada `wbOverlay`; voltar fecha só ele.
+- **Largura**: `custom.css` tem um bloco `@media (display-mode: standalone) and (max-width: 1023px)` que sobe
+  `.wa-bubble` para 88%, `.wa-card-body` para 92% e reduz o padding lateral de `.wa-thread` para 2%. É CSS
+  escrito à mão (`html .x` vence a classe única do Tailwind), então o `tailwind.css` não precisa mudar por isso.
+- **Cache**: `/static` é servido por `NoCacheStaticFiles` (`Cache-Control: no-cache` + ETag), para o app
+  instalado revalidar JS/CSS a cada abertura em vez de ficar com a interface antiga.
+- **Testes**: `node --test tests/navigation.test.cjs` simula histórico e popstate; `tests/test_pwa.py` cobre o
+  cabeçalho de revalidação. Validação em aparelho real (Android) segue manual.
+
 ## Atualização para 0.2.10
 
 Este pacote contém código-fonte e a versão em `WHATSBOT_VERSION`. Não é um EXE novo. Faça backup dos dados

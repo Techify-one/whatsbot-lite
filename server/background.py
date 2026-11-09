@@ -99,6 +99,24 @@ async def status_poll_loop(deps):
                     state.bot_name = name
                     if state.bot_phone:
                         group_mentions.set_bot_identity(state.bot_phone, state.bot_name)
+            # The connected account's number is whatever GOWA says it is RIGHT NOW. The saved
+            # ``bot_phone`` is only a fallback: trusting it first kept showing the previous
+            # account's number after the user paired a different one (the name, read live from
+            # GOWA, was already the new account's).
+            if connected:
+                live = await asyncio.to_thread(gowa_client.get_own_number)
+                live = (live or "").split(":")[0].strip()
+                if live and live != state.bot_phone:
+                    if state.bot_phone:
+                        logger.info("[Status] Connected number changed: %s -> %s",
+                                    state.bot_phone, live)
+                    state.bot_phone = live
+                    if settings.get("bot_phone", "") != live:
+                        try:
+                            settings.set("bot_phone", live)
+                        except Exception as e:
+                            logger.warning("[Status] Failed to persist bot_phone: %s", e)
+                    group_mentions.set_bot_identity(state.bot_phone, state.bot_name)
             # Populate bot identity for @mention detection in groups
             if connected and not state.bot_phone:
                 # Try config first

@@ -1366,10 +1366,17 @@ class AgentHandler:
         message_repo.update_status(contact.id, content, "sent", msg_id=msg_id)
         return {"content": content}
 
-    def update_last_user_message_content(self, phone: str, new_content: str) -> None:
-        """Update the content of the last user message (e.g., with transcription)."""
+    def update_last_user_message_content(self, phone: str, new_content: str,
+                                         msg_id: str | None = None) -> None:
+        """Update a user message's content (e.g., with a transcription).
+
+        With ``msg_id`` the exact media row is updated; without it (or when no
+        row carries that id) it falls back to the newest user message.
+        """
         contact = self._get_contact(phone)
-        msg = message_repo.get_last_user_message(contact.id)
+        msg = message_repo.get_user_message_by_msg_id(contact.id, msg_id) if msg_id else None
+        if not msg:
+            msg = message_repo.get_last_user_message(contact.id)
         if msg and msg.get("_id"):
             message_repo.update_content(msg["_id"], new_content)
 

@@ -21,10 +21,11 @@ import { GowaUpdateModal } from './components/GowaUpdateModal.js';
 import { WhatsNewModal } from './components/WhatsNewModal.js';
 import { useWebSocket } from './hooks/useWebSocket.js';
 import { useConfig } from './hooks/useConfig.js';
-import { checkAuth, authHeaders, getUnreadCount, installGowaUpdate, skipGowaVersion, skipRecommendedGowa, getGowaVersion, checkForUpdates, performUpdate, waitForCloudUpdate, skipWhatsBotVersion } from './services/api.js';
+import { checkAuth, authHeaders, getStatus, getUnreadCount, installGowaUpdate, skipGowaVersion, skipRecommendedGowa, getGowaVersion, checkForUpdates, performUpdate, waitForCloudUpdate, skipWhatsBotVersion } from './services/api.js';
 import { MODE_RECOMMENDED, MODE_COMPAT, recommendedPrompt, compatPrompt, nextPrompt, postponedRecommendation } from './utils/gowaPrompt.js';
 import { playTransferAlert } from './utils/alertSound.js';
 import { getNotifPref, playNotificationSound, showBrowserNotification } from './utils/notifications.js';
+import nav from './utils/navigation.js';
 
 const LOW_BALANCE_SNOOZE_KEY = 'whatsbot_low_balance_snoozed_until';
 
@@ -283,6 +284,11 @@ function App({ onLogout, hasPassword }) {
   const [qrVersion, setQrVersion] = useState(0);
   const [notification, setNotification] = useState('Iniciando...');
   const [wsConnected, setWsConnected] = useState(true);
+  // Bumped on every RE-connect of the WebSocket: events sent while the socket was down are lost, so
+  // the contact list and the open conversation refetch when this changes.
+  const [wsResyncNonce, setWsResyncNonce] = useState(0);
+  const [contactListEvent, setContactListEvent] = useState(null);
+  const wsEverConnectedRef = useRef(false);
   const [pluginScreens, setPluginScreens] = useState([]);
   const [tab, setTabState] = useState(() => tabFromPath([]));
   const [unreadConvos, setUnreadConvos] = useState(0);  // conversations with unread msgs (tab-title badge)
@@ -315,13 +321,13 @@ function App({ onLogout, hasPassword }) {
   // reached directly (and bookmarked / shared).
   const openWizard = useCallback(() => {
     setWizardManual(true);
-    if (window.location.pathname !== '/wizard') history.pushState(null, '', '/wizard');
+    if (window.location.pathname !== '/wizard') nav.push('/wizard');
   }, []);
   const closeWizard = useCallback(() => {
     wizardLatchRef.current = false;
     setWizardManual(false);
     if (window.location.pathname === '/wizard') {
-      history.pushState(null, '', '/');
+      nav.push('/');
       window.dispatchEvent(new PopStateEvent('popstate'));
     }
   }, []);
@@ -350,6 +356,10 @@ function App({ onLogout, hasPassword }) {
     setTabState(t);
     const path = pathForTab(t, pluginScreens);
     if (window.location.pathname !== path) {
+      // Installed app: replace/jump instead of stacking screens, so ONE back
+      // (system button or the ← arrow) reaches the contact list. It notifies
+      // popstate listeners itself. The web version keeps the plain push below.
+      if (nav.tabNavigate(path)) return;
       history.pushState(null, '', path);
       // pushState doesn't fire popstate; notify listeners (e.g. Executions
       // syncs its detail view with the URL).
@@ -378,7 +388,7 @@ function App({ onLogout, hasPassword }) {
   useEffect(() => {
     const firstRun = config && config.setup_completed !== true && !config.openrouter_api_key;
     if (firstRun && window.location.pathname !== '/wizard') {
-      history.replaceState(null, '', '/wizard');
+      nav.replace('/wizard');
     }
   }, [config]);
 
@@ -533,10 +543,18 @@ function App({ onLogout, hasPassword }) {
       setNotification(data && data.message ? data.message : '');
       if (data && data.ok) setGowaUpdate(null);
     }, []),
+    onContactListEvent: useCallback((data) => setContactListEvent({ ...data, _t: Date.now() }), []),
     onWsConnect: useCallback(() => {
       setWsConnected(true);
       checkWhatsBotUpdate();
       checkRecommendedGowa();
+      // The first connect just opened the page (everything loads on mount). Later ones mean the socket
+      // dropped (phone in the background, network change): refresh what could have changed meanwhile.
+      if (wsEverConnectedRef.current) {
+        setWsResyncNonce(n => n + 1);
+        getStatus().then(res => { if (res && res.ok && res.data) setStatus(res.data); }).catch(() => {});
+      }
+      wsEverConnectedRef.current = true;
     }, [checkWhatsBotUpdate, checkRecommendedGowa]),
     onWsDisconnect: useCallback(() => setWsConnected(false), []),
   });
@@ -763,7 +781,7 @@ function App({ onLogout, hasPassword }) {
                   />
                 </div>`
               : tab === 'contacts'
-                ? html`<${Contacts} newMessage=${newMessage} chatPresence=${chatPresence} contactInfoUpdated=${contactInfoUpdated} tagsChanged=${tagsChanged} contactTagsUpdated=${contactTagsUpdated} contactAiToggled=${contactAiToggled} messagesRead=${messagesRead} messageStatus=${messageStatus} messageAction=${messageAction} messageReaction=${messageReaction} mediaUpdated=${mediaUpdated} avatarUpdated=${avatarUpdated} groupParticipantsChanged=${groupParticipantsChanged} initialContactId=${initialContactId} initialMessageId=${initialMessageId} wsConnected=${wsConnected} config=${config} onConfigSave=${save} onUnreadChange=${refreshUnreadCount} />`
+                ? html`<${Contacts} newMessage=${newMessage} chatPresence=${chatPresence} contactInfoUpdated=${contactInfoUpdated} tagsChanged=${tagsChanged} contactTagsUpdated=${contactTagsUpdated} contactAiToggled=${contactAiToggled} messagesRead=${messagesRead} messageStatus=${messageStatus} messageAction=${messageAction} messageReaction=${messageReaction} mediaUpdated=${mediaUpdated} avatarUpdated=${avatarUpdated} groupParticipantsChanged=${groupParticipantsChanged} initialContactId=${initialContactId} initialMessageId=${initialMessageId} wsConnected=${wsConnected} wsResyncNonce=${wsResyncNonce} contactListEvent=${contactListEvent} config=${config} onConfigSave=${save} onUnreadChange=${refreshUnreadCount} />`
                 : tab === 'costs'
                   ? html`<div class="page-wrap max-w-5xl mx-auto p-4">
                       <${PageHeader} title="Custos de IA" onBack=${() => setTab('contacts')} />
@@ -773,7 +791,7 @@ function App({ onLogout, hasPassword }) {
                     ? html`<div class="page-wrap max-w-5xl mx-auto p-4 h-full">
                         <${PageHeader} title="Execuções" onBack=${() => {
                           if (window.location.pathname.match(/^\/executions\/\d+$/)) {
-                            history.pushState(null, '', '/executions');
+                            nav.swap('/executions');
                             window.dispatchEvent(new PopStateEvent('popstate'));
                           } else {
                             setTab('contacts');
@@ -882,5 +900,8 @@ function AuthGate() {
 
   return html`<${App} onLogout=${handleLogout} hasPassword=${hasPassword} />`;
 }
+
+// Installed app only: guarantee a "/" entry under a deep link so back never exits.
+nav.installRootGuard();
 
 render(html`<${AuthGate} />`, document.getElementById('app'));

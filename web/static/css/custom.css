@@ -732,6 +732,16 @@ html body.h-dvh, html .h-dvh.app-safe-area { height: var(--app-h, 100dvh); }
   }
 }
 
+/* ── Installed app on a phone: use the width. The 65%/75% caps and the 4% side padding leave a
+ * large dead strip next to every bubble on a narrow screen. Only the installed app (standalone)
+ * below the `lg` breakpoint changes — the web version and the desktop layout are untouched.
+ * `html .x` out-ranks Tailwind's single-class `.max-w-[65%]`, so tailwind.css needs no rebuild. ── */
+@media (display-mode: standalone) and (max-width: 1023px) {
+  html .wa-thread { padding-left: 2%; padding-right: 2%; }
+  html .wa-bubble { max-width: 88%; }
+  html .wa-card-body { max-width: 92%; }
+}
+
 /* Floating gear: sits inside the safe area (notch / status bar), 12px from the edges. */
 .app-gear { top: max(0.75rem, env(safe-area-inset-top)); right: max(0.75rem, env(safe-area-inset-right)); }
 

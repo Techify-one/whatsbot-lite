@@ -8,6 +8,15 @@ import { ContactInfoPanel } from './ContactInfoPanel.js';
 import { ContextMenu } from './ContextMenu.js';
 import { StartChatWarningModal } from './StartChatWarningModal.js';
 import { formatPhoneDisplay } from './utils.js';
+import { sameMessage, findDuplicateIndex } from '../../services/messages.js';
+import { applyContactListEvent } from '../../services/contactListEvents.js';
+import nav from '../../utils/navigation.js';
+
+// Back to the contact list. Installed app: jump down the history stack (like the system
+// back button) instead of pushing a new "/" entry; the web version keeps the push.
+function goToContactList() {
+  if (!nav.goToRoot()) history.pushState(null, '', '/');
+}
 
 const html = htm.bind(h);
 
@@ -23,14 +32,11 @@ function hydrateMessages(list) {
   ));
 }
 
-function sameMessage(a, b) {
-  return (a.ts === b.ts && a.role === b.role)
-    || (a.role === b.role && a.content === b.content && Math.abs(a.ts - b.ts) < 30);
-}
+// Dedupe rules live in services/messages.js (msg_id first; content window only as fallback).
 
 // ── Main Component ───────────────────────────────────────────────
 
-export function Contacts({ newMessage, chatPresence, contactInfoUpdated, tagsChanged, contactTagsUpdated, contactAiToggled, messagesRead, messageStatus, messageAction, messageReaction, mediaUpdated, avatarUpdated, groupParticipantsChanged, initialContactId, initialMessageId, wsConnected, config, onConfigSave, onUnreadChange }) {
+export function Contacts({ newMessage, chatPresence, contactInfoUpdated, tagsChanged, contactTagsUpdated, contactAiToggled, messagesRead, messageStatus, messageAction, messageReaction, mediaUpdated, avatarUpdated, groupParticipantsChanged, initialContactId, initialMessageId, wsConnected, wsResyncNonce = 0, contactListEvent = null, config, onConfigSave, onUnreadChange }) {
   const [contacts, setContacts] = useState([]);
   const [loading, setLoading] = useState(true);
   const [search, setSearch] = useState('');
@@ -66,6 +72,28 @@ export function Contacts({ newMessage, chatPresence, contactInfoUpdated, tagsCha
   const lastResolvedId = useRef(null);
   const triedArchivedRef = useRef(false);
   const pageVisibleRef = useRef(!document.hidden);
+
+  // Installed app: the contact info panel gets its own history entry so the phone's back
+  // button closes just the panel instead of leaving the conversation.
+  useEffect(() => {
+    if (showInfoPanel) nav.pushOverlay('info');
+    else nav.popOverlay('info');
+  }, [showInfoPanel]);
+  // Installed app: the phone's back button, from a conversation to "/", closes the conversation.
+  useEffect(() => {
+    const onBack = (e) => {
+      if (!nav.backedToRoot(e) || selectedRef.current == null) return;
+      lastResolvedId.current = null;
+      setSelected(null);
+    };
+    window.addEventListener('popstate', onBack);
+    return () => window.removeEventListener('popstate', onBack);
+  }, []);
+  useEffect(() => {
+    const onPop = () => { if (!nav.hasOverlay('info')) setShowInfoPanel(false); };
+    window.addEventListener('popstate', onPop);
+    return () => window.removeEventListener('popstate', onPop);
+  }, []);
 
   // Keep refs in sync — avoids stale closures
   useEffect(() => { selectedRef.current = selected; }, [selected]);
@@ -133,7 +161,7 @@ export function Contacts({ newMessage, chatPresence, contactInfoUpdated, tagsCha
       if (selectedRef.current === phone) {
         setSelected(null);
         setContactData(null);
-        history.pushState(null, '', '/');
+        goToContactList();
       }
     }
   }, []);
@@ -145,7 +173,7 @@ export function Contacts({ newMessage, chatPresence, contactInfoUpdated, tagsCha
       if (selectedRef.current === phone) {
         setSelected(null);
         setContactData(null);
-        history.pushState(null, '', '/');
+        goToContactList();
       }
     }
   }, []);
@@ -203,7 +231,7 @@ export function Contacts({ newMessage, chatPresence, contactInfoUpdated, tagsCha
     if (phones.includes(selectedRef.current)) {
       setSelected(null);
       setContactData(null);
-      history.pushState(null, '', '/');
+      goToContactList();
     }
     exitSelection();
   }, [selectedPhones, exitSelection]);
@@ -305,10 +333,15 @@ export function Contacts({ newMessage, chatPresence, contactInfoUpdated, tagsCha
     if (phone) {
       const c = contactsRef.current.find(c => c.phone === phone);
       if (c && c.id != null) {
-        history.pushState(null, '', `/contacts/${c.id}`);
+        const path = `/contacts/${c.id}`;
+        // Installed app: replace when already inside a conversation (no stack growth).
+        // ⚠️ Do NOT stamp lastResolvedId here: App's initialContactId stays null (pushState fires
+        // no popstate), so the resolve effect would read "URL is / but something was resolved" on
+        // the next contacts refresh (e.g. the unread reset) and close the conversation just opened.
+        if (!nav.openContactEntry(path)) history.pushState(null, '', path);
       }
     } else {
-      history.pushState(null, '', '/');
+      goToContactList();
     }
   }, []);
 
@@ -319,6 +352,8 @@ export function Contacts({ newMessage, chatPresence, contactInfoUpdated, tagsCha
 
   const showArchivedRef = useRef(false);
   useEffect(() => { showArchivedRef.current = showArchived; }, [showArchived]);
+  const searchRef = useRef('');
+  useEffect(() => { searchRef.current = search; }, [search]);
 
   // Only the newest list request may write state: an older, slower reply (a
   // stale search, the boot load overtaken by a WS refresh) is discarded.
@@ -517,6 +552,37 @@ export function Contacts({ newMessage, chatPresence, contactInfoUpdated, tagsCha
         if (reqId === detailReq.current) setLoadingDetail(false);
       });
   }, []);
+
+  // The WebSocket dropped and came back (phone in the background, network change): events sent in the
+  // meantime are gone for good, so reload what they would have updated. The list keeps the active search
+  // and archive filter; the open conversation is refetched in place (no "Carregando…" flash).
+  const resyncSeen = useRef(wsResyncNonce);
+  useEffect(() => {
+    if (wsResyncNonce === resyncSeen.current) return;
+    resyncSeen.current = wsResyncNonce;
+    fetchContacts(searchRef.current);
+    const phone = selectedRef.current;
+    if (phone) loadDetail(phone, { around: null });
+  }, [wsResyncNonce]);
+
+  // Contact removed / archived / pinned by something other than this screen (another tab or device, the
+  // server). Our own buttons already update the list locally, so applying their echo is a no-op.
+  useEffect(() => {
+    if (!contactListEvent) return;
+    const r = applyContactListEvent(contactsRef.current, contactListEvent, {
+      showArchived: showArchivedRef.current, selectedPhone: selectedRef.current,
+    });
+    if (r.contacts !== contactsRef.current) {
+      contactsRef.current = r.contacts;
+      setContacts(r.contacts);
+    }
+    if (r.deselect) {
+      setSelected(null);
+      setContactData(null);
+      goToContactList();
+    }
+    if (r.refetch) fetchContacts(searchRef.current);
+  }, [contactListEvent]);
 
   // Load contact detail when selected changes
   useEffect(() => {
@@ -912,10 +978,7 @@ export function Contacts({ newMessage, chatPresence, contactInfoUpdated, tagsCha
         if (!prev) {
           // Contact data still loading — buffer in per-phone map
           const buf = pendingWsMessages.current[phone] || [];
-          if (!buf.some(m =>
-            (m.ts === message.ts && m.role === message.role) ||
-            (m.role === message.role && m.content === message.content && Math.abs(m.ts - message.ts) < 30)
-          )) {
+          if (!buf.some(m => sameMessage(m, message))) {
             pendingWsMessages.current[phone] = [...buf, message];
           }
           return prev;
@@ -946,11 +1009,9 @@ export function Contacts({ newMessage, chatPresence, contactInfoUpdated, tagsCha
             return { ...prev, messages: updated };
           }
         }
-        // Deduplicate by ts + role, or by content + role (within 30s window)
-        const dupIdx = prev.messages ? prev.messages.findIndex(m =>
-          (m.ts === message.ts && m.role === message.role) ||
-          (m.role === message.role && m.content === message.content && Math.abs(m.ts - message.ts) < 30)
-        ) : -1;
+        // Deduplicate: msg_id/_id decide when both sides have one; otherwise ts + role,
+        // or content + role within 30s (optimistic bubbles have no msg_id yet).
+        const dupIdx = findDuplicateIndex(message, prev.messages);
         if (dupIdx !== -1) {
           // Merge ids/status from server into existing (optimistic) message
           if (message.msg_id || message.status || message._id) {
@@ -974,10 +1035,7 @@ export function Contacts({ newMessage, chatPresence, contactInfoUpdated, tagsCha
     } else {
       // Contact NOT selected — buffer for when it's opened
       const buf = pendingWsMessages.current[phone] || [];
-      if (!buf.some(m =>
-        (m.ts === message.ts && m.role === message.role) ||
-        (m.role === message.role && m.content === message.content && Math.abs(m.ts - message.ts) < 30)
-      )) {
+      if (!buf.some(m => sameMessage(m, message))) {
         pendingWsMessages.current[phone] = [...buf, message];
       }
     }

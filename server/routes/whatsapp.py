@@ -52,6 +52,12 @@ def register_routes(app, deps):
         state.connected = False
         state.bot_phone = ""
         state.bot_name = ""
+        # The saved number belongs to the account that just logged out; keeping it would
+        # show it for whichever account is paired next.
+        try:
+            deps.settings.set("bot_phone", "")
+        except Exception as e:
+            logger.warning("[Logout] Failed to clear saved bot_phone: %s", e)
         state.notification = "Desconectado."
         await ws_manager.broadcast("status", {
             "connected": False,

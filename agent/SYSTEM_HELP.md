@@ -30,6 +30,10 @@ Esta tela mostra as conversas, mensagens, contatos e o estado da conexão com o 
 
 [Abrir conversas]({{base_url}}/)
 
+### Voltar no app instalado no celular
+
+Quando o WhatsBot está instalado na tela inicial do celular (como aplicativo), o botão de voltar do celular e a setinha **←** no canto superior esquerdo fazem a mesma coisa: de dentro de uma conversa ou de uma tela como Configurações, Plugins ou Arquivos, voltam **uma vez** para a lista de conversas. Se o aplicativo foi aberto direto numa conversa (por exemplo, ao tocar numa notificação), voltar também leva à lista em vez de fechar o aplicativo. Com o painel de informações do contato aberto, voltar fecha só o painel. No app instalado, as mensagens também ocupam mais da largura da tela. No navegador comum nada disso muda.
+
 ### Ler mensagens antigas de uma conversa
 
 Ao abrir uma conversa, o WhatsBot-Lite mostra primeiro as mensagens mais recentes, para que ela abra rápido mesmo quando o histórico tem milhares de mensagens. Nada é apagado: o histórico completo continua guardado.
@@ -173,7 +177,7 @@ Em **Painel → Modelos e mídia → API e Modelos**, escolha o modo de **Transc
 
 Em **Painel → Modelos e mídia → Download automático de mídia**, há uma tabela com áudios, fotos e figurinhas, vídeos e documentos. Para cada tipo, marque se o arquivo deve ser guardado nas **conversas individuais** e nos **grupos**, e clique em **Salvar configurações** no fim do painel. O padrão guarda só os áudios; fotos, figurinhas, vídeos e documentos não são guardados, o que poupa muito espaço, principalmente em grupos movimentados.
 
-O que não for guardado continua aparecendo na conversa como “Foto não baixada” (ou Vídeo, Documento...), e a IA ainda descreve a imagem, lê o documento ou transcreve o áudio antes de o arquivo ser descartado, então o texto fica na conversa. Quem quiser ver o arquivo depois pode clicar em **Baixar** no balão: o WhatsBot tenta buscá-lo de novo no WhatsApp. Isso só funciona se o WhatsApp ainda tiver o arquivo; mensagens com mais de algumas semanas costumam não estar mais disponíveis, e o aviso aparece no próprio balão.
+O que não for guardado continua aparecendo na conversa como “Foto não baixada” (ou Vídeo, Documento...), e a IA ainda descreve a imagem, lê o documento ou transcreve o áudio antes de o arquivo ser descartado, então o texto fica guardado. Esse texto aparece num cartão roxo **Transcrição privada**, que só você vê (o cliente nunca recebe): ele vem recolhido, numa linha só, e basta tocar nele para abrir ou fechar. Quem quiser ver o arquivo depois pode clicar em **Baixar** no balão: o WhatsBot tenta buscá-lo de novo no WhatsApp. Isso só funciona se o WhatsApp ainda tiver o arquivo; mensagens com mais de algumas semanas costumam não estar mais disponíveis, e o aviso aparece no próprio balão.
 
 [Abrir download automático de mídia]({{base_url}}/painel?aba=modelos-midia#download-midia)
 

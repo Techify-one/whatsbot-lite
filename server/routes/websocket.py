@@ -29,6 +29,10 @@ def register_routes(app, deps):
                 "connected": state.connected,
                 "msg_count": state.msg_count,
                 "auto_reply_running": state.auto_reply_running,
+                # Without these the panel kept the previous number/name after a reconnect,
+                # until the next 5 s status broadcast (which a dropped socket never received).
+                "bot_phone": state.bot_phone,
+                "bot_name": state.bot_name,
             }}))
             await websocket.send_text(json.dumps({"event": "gowa_status", "data": {
                 "message": state.notification,

@@ -10,6 +10,8 @@ import { MediaPlaceholder } from './MediaPlaceholder.js';
 import { MessageContextMenu, CopyIcon, TrashIcon, ReplyIcon, ImproveIcon, copyToClipboard } from './MessageContextMenu.js';
 import { EmojiPicker } from './EmojiPicker.js';
 import { Slot } from '../../plugins/slots.js';
+import { SystemMessageCard } from './SystemMessageCard.js';
+import { cardStateKey, mediaCaptionOf, isAiContentLabel } from '../../services/messageView.js';
 
 const html = htm.bind(h);
 
@@ -68,6 +70,15 @@ export function ContactDetail({ phone, onBack, messages, info, contact, onAvatar
   const [imagePreviewUrl, setImagePreviewUrl] = useState(null);
   // Message being replied to (quoted) — drives the preview bar above the input.
   const [replyingTo, setReplyingTo] = useState(null);
+  // Transcription / tool-call cards start minimized; this Set holds the ones the
+  // operator expanded (keyed by cardStateKey so it follows the message, not its index).
+  const [expandedCards, setExpandedCards] = useState(() => new Set());
+  const toggleCard = (key) => setExpandedCards(prev => {
+    const next = new Set(prev);
+    if (next.has(key)) next.delete(key); else next.add(key);
+    return next;
+  });
+  useEffect(() => { setExpandedCards(new Set()); }, [phone]);
   const chatRef = useRef(null);
   const fileInputRef = useRef(null);
   const docInputRef = useRef(null);
@@ -970,7 +981,7 @@ export function ContactDetail({ phone, onBack, messages, info, contact, onAvatar
       </div>
 
       <!-- Chat area with doodle pattern -->
-      <div ref=${chatRef} onScroll=${handleChatScroll} onLoadCapture=${keepBottom} onLoadedMetadataCapture=${keepBottom} class="flex-1 min-h-0 overflow-y-auto overscroll-contain wa-scrollbar wa-chat-pattern py-2 px-[4%] lg:px-[7%]">
+      <div ref=${chatRef} onScroll=${handleChatScroll} onLoadCapture=${keepBottom} onLoadedMetadataCapture=${keepBottom} class="flex-1 min-h-0 overflow-y-auto overscroll-contain wa-scrollbar wa-chat-pattern wa-thread py-2 px-[4%] lg:px-[7%]">
         ${hasMoreBefore ? html`
           <div class="flex justify-center py-2">
             <button type="button" onClick=${requestOlder} disabled=${loadingOlder}
@@ -1010,7 +1021,7 @@ export function ContactDetail({ phone, onBack, messages, info, contact, onAvatar
                   <div key=${msgKey(m, i)} data-mid=${m._id} class="flex justify-center mt-[4px]">
                     <div
                       onContextMenu=${(e) => openMsgMenu(e, m, true)}
-                      class="group max-w-[75%] rounded-[7.5px] px-[11px] pt-[6px] pb-[7px] text-[13px] leading-[18px] whitespace-pre-wrap relative shadow-sm"
+                      class="wa-card-body group max-w-[75%] rounded-[7.5px] px-[11px] pt-[6px] pb-[7px] text-[13px] leading-[18px] whitespace-pre-wrap relative shadow-sm"
                       style="background:#3b266b; color:#ede9fe; border:1px solid #7c3aed; ${failed ? 'opacity:0.7;' : ''}">
                       <button
                         onClick=${(e) => openMsgMenu(e, m, true)}
@@ -1034,21 +1045,13 @@ export function ContactDetail({ phone, onBack, messages, info, contact, onAvatar
                 `];
               }
 
-              if (isTranscription) {
+              if (isTranscription || isToolCall) {
+                // Minimized chip by default (same as whatsbot-pro); tap to expand.
+                const cardKey = cardStateKey(m, i);
                 return [dateSeparator, html`
-                  <div key=${msgKey(m, i)} data-mid=${m._id} class="flex justify-center mt-[4px]">
-                    <div class="max-w-[75%] rounded-[7.5px] px-[10px] pt-[5px] pb-[6px] text-[12.5px] leading-[17px] whitespace-pre-wrap relative"
-                         style="background: #2d1b4e; color: #d4bfff; border: 1px solid #4a2d7a;">
-                      <span class="flex items-center gap-1 text-[10px] font-semibold mb-[2px] opacity-80">
-                        <svg width="10" height="10" viewBox="0 0 24 24" fill="currentColor"><path d="M18 8h-1V6c0-2.76-2.24-5-5-5S7 3.24 7 6v2H6c-1.1 0-2 .9-2 2v10c0 1.1.9 2 2 2h12c1.1 0 2-.9 2-2V10c0-1.1-.9-2-2-2zm-6 9c-1.1 0-2-.9-2-2s.9-2 2-2 2 .9 2 2-.9 2-2 2zm3.1-9H8.9V6c0-1.71 1.39-3.1 3.1-3.1s3.1 1.39 3.1 3.1v2z"/></svg>
-                        Transcrição privada
-                      </span>
-                      <span dangerouslySetInnerHTML=${{ __html: fmt(m.content)}}></span>
-                      <span class="float-right ml-[8px] mt-[2px] text-[10px] leading-[14px] whitespace-nowrap opacity-60">
-                        ${formatBubbleTime(m.ts)}
-                      </span>
-                    </div>
-                  </div>
+                  <${SystemMessageCard} key=${msgKey(m, i)} message=${m} fmt=${fmt}
+                    collapsed=${!expandedCards.has(cardKey)}
+                    onToggleCollapse=${() => toggleCard(cardKey)} />
                 `];
               }
 
@@ -1075,7 +1078,7 @@ export function ContactDetail({ phone, onBack, messages, info, contact, onAvatar
                   <div key=${msgKey(m, i)} data-mid=${m._id} class="flex justify-center mt-[4px]">
                     <div
                       onContextMenu=${(e) => openMsgMenu(e, m, false)}
-                      class="group max-w-[75%] rounded-[7.5px] px-[11px] pt-[6px] pb-[7px] text-[13px] leading-[18px] whitespace-pre-wrap relative shadow-sm"
+                      class="wa-card-body group max-w-[75%] rounded-[7.5px] px-[11px] pt-[6px] pb-[7px] text-[13px] leading-[18px] whitespace-pre-wrap relative shadow-sm"
                       style="background: #374151; color: #e5e7eb; border: 1px solid #4b5563;">
                       <button
                         onClick=${(e) => openMsgMenu(e, m, false)}
@@ -1099,23 +1102,6 @@ export function ContactDetail({ phone, onBack, messages, info, contact, onAvatar
                 `];
               }
 
-              if (isToolCall) {
-                return [dateSeparator, html`
-                  <div key=${msgKey(m, i)} class="flex justify-center mt-[4px]">
-                    <div class="max-w-[75%] rounded-[7.5px] px-[10px] pt-[5px] pb-[6px] text-[12.5px] leading-[17px] whitespace-pre-wrap relative"
-                         style="background: #2d1b0e; color: #fbbf24; border: 1px solid #78350f;">
-                      <span class="flex items-center gap-1 text-[10px] font-semibold mb-[2px] opacity-80">
-                        <svg width="10" height="10" viewBox="0 0 24 24" fill="currentColor"><path d="M22.7 19l-9.1-9.1c.9-2.3.4-5-1.5-6.9-2-2-5-2.4-7.4-1.3L9 6 6 9 1.6 4.7C.4 7.1.9 10.1 2.9 12.1c1.9 1.9 4.6 2.4 6.9 1.5l9.1 9.1c.4.4 1 .4 1.4 0l2.3-2.3c.5-.4.5-1.1.1-1.4z"/></svg>
-                        Ferramenta IA
-                      </span>
-                      <span dangerouslySetInnerHTML=${{ __html: fmt(m.content)}}></span>
-                      <span class="float-right ml-[8px] mt-[2px] text-[10px] leading-[14px] whitespace-nowrap opacity-60">
-                        ${formatBubbleTime(m.ts)}
-                      </span>
-                    </div>
-                  </div>
-                `];
-              }
 
               if (isError) {
                 return [dateSeparator, html`
@@ -1145,7 +1131,8 @@ export function ContactDetail({ phone, onBack, messages, info, contact, onAvatar
               let groupSender = null;
               if (isUser && isGroup && typeof m.content === 'string') {
                 const match = m.content.match(/^\[([^\]]+)\]:\s*([\s\S]*)$/);
-                if (match) {
+                // "[Descrição da imagem]: …" is the AI's text, not a group member's name.
+                if (match && !isAiContentLabel(match[1])) {
                   groupSender = match[1];
                   displayContent = match[2];
                 }
@@ -1218,8 +1205,9 @@ export function ContactDetail({ phone, onBack, messages, info, contact, onAvatar
                     ${m.revoked ? '' : (m.media_state && !m.media_path && ['image', 'sticker', 'video', 'audio', 'document'].includes(m.media_type)) ? html`
                       <${MediaPlaceholder} phone=${phone} message=${m} readOnly=${sandbox} />
                       ${(() => {
-                        // Keep what the AI wrote about the file (description / transcript / caption).
-                        const keep = (displayContent || '').replace(/^\[(?:Imagem|Áudio|Vídeo|Documento)[^\]]*\]\n?/, '').trim();
+                        // Only what the customer wrote: the AI's description/transcript is
+                        // already in the private "Transcrição privada" card.
+                        const keep = mediaCaptionOf(displayContent);
                         return keep ? html`<span dangerouslySetInnerHTML=${{ __html: fmt(keep) }}></span>` : null;
                       })()}
                     ` : m.media_type === 'image' ? html`
@@ -1234,13 +1222,13 @@ export function ContactDetail({ phone, onBack, messages, info, contact, onAvatar
                         }}
                         loading="lazy"
                       />
-                      ${displayContent && displayContent !== '[Imagem enviada pelo contato]' && !displayContent.startsWith('[Descrição da imagem]')
-                        ? html`<span dangerouslySetInnerHTML=${{ __html: fmt(displayContent)}}></span>`
+                      ${mediaCaptionOf(displayContent)
+                        ? html`<span dangerouslySetInnerHTML=${{ __html: fmt(mediaCaptionOf(displayContent))}}></span>`
                         : null}
                     ` : m.media_type === 'audio' ? html`
                       <${AudioPlayer} src=${m.media_path} isLocalBlob=${m._isLocalBlob} />
-                      ${displayContent && displayContent !== '[Áudio recebido]' && displayContent !== '[Áudio]' && !displayContent.startsWith('[Transcrição do áudio]')
-                        ? html`<span class="block text-[12px] text-wa-secondary italic" dangerouslySetInnerHTML=${{ __html: fmt(displayContent)}}></span>`
+                      ${mediaCaptionOf(displayContent)
+                        ? html`<span class="block text-[12px] text-wa-secondary italic" dangerouslySetInnerHTML=${{ __html: fmt(mediaCaptionOf(displayContent))}}></span>`
                         : null}
                     ` : m.media_type === 'video' ? html`
                       <video
@@ -1250,8 +1238,8 @@ export function ContactDetail({ phone, onBack, messages, info, contact, onAvatar
                         class="rounded-[4px] max-w-full max-h-[320px] mb-1"
                         style="min-width:180px"
                       ></video>
-                      ${displayContent && !displayContent.startsWith('[Vídeo')
-                        ? html`<span dangerouslySetInnerHTML=${{ __html: fmt(displayContent)}}></span>`
+                      ${mediaCaptionOf(displayContent)
+                        ? html`<span dangerouslySetInnerHTML=${{ __html: fmt(mediaCaptionOf(displayContent))}}></span>`
                         : null}
                     ` : m.media_type === 'sticker' ? html`
                       <img
@@ -1283,7 +1271,7 @@ export function ContactDetail({ phone, onBack, messages, info, contact, onAvatar
                         const dc = displayContent || '';
                         const mm = dc.match(/^\[Documento (?:recebido|enviado): ([^\]]+)\]\n?([\s\S]*)$/);
                         const docName = mm ? mm[1] : 'Documento';
-                        const docCaption = (mm ? mm[2] : dc).trim();
+                        const docCaption = mediaCaptionOf(mm ? mm[2] : dc);
                         return html`
                           <div class="flex flex-col gap-1">
                             <a
