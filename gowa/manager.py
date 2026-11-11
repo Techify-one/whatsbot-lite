@@ -39,6 +39,9 @@ def _gowa_log_path() -> Path:
 GOWA_BIND_ENV = "APP_HOST"
 GOWA_DEFAULT_BIND = "127.0.0.1"
 
+GOWA_STOP_TIMEOUT_SEC = 10   # SIGTERM -> exit
+GOWA_KILL_TIMEOUT_SEC = 5    # SIGKILL -> reaped
+
 def _debug_enabled() -> bool:
     return os.environ.get("WHATSBOT_GOWA_DEBUG", "").strip().lower() in {"1", "true", "yes", "on"}
 
@@ -208,11 +211,22 @@ class GOWAManager:
         logger.info("Stopping GOWA (pid=%s)...", self._process.pid)
         try:
             self._process.terminate()
-            self._process.wait(timeout=5)
+            # With a live session GOWA needs ~6.5s to shut down cleanly (measured
+            # in gVisor); 5s forced a SIGKILL on every update.
+            self._process.wait(timeout=GOWA_STOP_TIMEOUT_SEC)
         except subprocess.TimeoutExpired:
             logger.warning("GOWA did not stop gracefully, killing...")
             self._process.kill()
-            self._process.wait(timeout=3)
+            try:
+                self._process.wait(timeout=GOWA_KILL_TIMEOUT_SEC)
+            except subprocess.TimeoutExpired:
+                # SIGKILL cannot be ignored: the kernel just has not reaped it yet
+                # (seen with a saturated disk). Raising here aborted the GOWA update
+                # with "Erro inesperado"; carry on, it dies on its own.
+                logger.warning(
+                    "GOWA (pid=%s) still not reaped %ss after SIGKILL; continuing.",
+                    self._process.pid, GOWA_KILL_TIMEOUT_SEC,
+                )
         except Exception as e:
             logger.error("Error stopping GOWA: %s", e)
         finally:

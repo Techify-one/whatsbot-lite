@@ -331,6 +331,9 @@ Depois que você atualiza o WhatsBot-Lite, ele pode abrir sozinho um aviso **Mot
 
 [Abrir versão e atualização do GOWA]({{base_url}}/painel?aba=sistema#gowa-version)
 
+**Requisito mínimo de processador.** No **Linux** (incluindo Docker e Coolify), o motor do WhatsApp a partir da versão 9.8 exige um processador com **AVX2**: na prática, Intel a partir da 4ª geração Core ("Haswell", 2013) ou Xeon E5 v3, e AMD a partir da família Excavator (2015) ou Ryzen (2017). Em processadores mais antigos, a atualização não é instalada: aparece o aviso **Processador incompatível com esta versão do GOWA** e a versão atual continua funcionando. No **Windows** e no **Mac** não há requisito extra hoje, mas isso pode mudar conforme a forma como cada versão do motor é publicada.
+
+
 ### Configurar o proxy da conexão do WhatsApp
 
 Em **Painel → Sistema → GOWA**, abra **Proxy da conexão do WhatsApp**. É possível informar IP e porta ou uma URL de proxy, testar a conexão e salvar. Ao salvar, o motor do WhatsApp reinicia e se reconecta.

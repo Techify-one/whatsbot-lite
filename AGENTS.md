@@ -396,6 +396,40 @@ a tabela e o `.version` divergirem. Bumpar `GOWA_VERSION` **sem** trocar o exe �
 versão recomendada baixa o binário (o exe novo no repositório é recomendado, não obrigatório). Os
 launchers de Linux/macOS e o Dockerfile continuam baixando o que o `GOWA_VERSION` pede e gravando o stamp.
 
+### CPU incompatível e o build "compat" (só na hospedagem)
+
+Os binários Linux oficiais do GOWA a partir da **9.8.0** são marcados como `x86-64-v3` (exigem AVX2) e
+não abrem em CPUs antigas (ex.: o Xeon E5-2660 da hospedagem). O `_smoke_test` reconhece CPU
+incompatível nos três sistemas e levanta `GowaCpuIsaError`:
+
+| Sinal | Sistema |
+|---|---|
+| texto `CPU ISA level is lower than required` (exit 127) | Linux (loader da glibc) |
+| `returncode == -4` (morto por `SIGILL`) | Linux / macOS |
+| `returncode == 0xC000001D` (`STATUS_ILLEGAL_INSTRUCTION`, `3221225501`) | Windows (não testado em máquina real) |
+
+O mesmo erro sai quando o GOWA novo **sobe e morre** por instrução ilegal (rollback + aviso).
+
+- **Plano B (compat):** só quando `WHATSBOT_GOWA_COMPAT_URL` está definida **e** a plataforma é
+  `linux/amd64`. Busca `whatsapp_<v>_linux_amd64_compat.zip` nessa base, exige o sha256 no
+  `checksums.txt` **da mesma base** (sem checksum = recusa), roda o `--help` de novo e segue o fluxo
+  normal. `gowa_meta.json` grava `"flavor": "compat"` (ou `"official"`).
+- **Sem endereço padrão.** Sem a env, o plano B não existe. Só a hospedagem a define, como
+  `file:///opt/gowa-compat` (pasta do host montada **somente leitura**). `compat_base_url()` aceita só
+  `file://` e `https://`; a URL final é montada no servidor a partir da versão validada pela regex.
+- **Sem plano B** (Windows, Mac, Coolify, Linux próprio): a versão atual é mantida e a resposta traz
+  `error_code: "cpu_unsupported"` + `CPU_UNSUPPORTED_MESSAGE`. O `GowaSettings` e o `GowaUpdateModal`
+  mostram esse aviso em âmbar, separado do toast genérico. Compat ausente ou checksum inválido mantém a
+  mensagem genérica.
+- **O compat é o código oficial da tag**, compilado no servidor com
+  `CGO_ENABLED=1 GOAMD64=v1 CGO_CFLAGS="-O2 -march=x86-64 -mtune=generic"` (script
+  `gowa-compat-build.sh` do `whatsbot-infra`). O hash dele **não** entra em `KNOWN_BINARY_HASHES`.
+- **Não bumpar `GOWA_VERSION` para 9.8+** antes de o Dockerfile e o `linux_start.sh` terem o mesmo
+  plano B: eles baixam o oficial a partir dela, e a imagem da hospedagem nasceria com um GOWA que não abre.
+- `manager.stop()` espera `GOWA_STOP_TIMEOUT_SEC` (10 s) após o SIGTERM, porque com sessão ativa o GOWA
+  leva ~6,5 s para sair. Um `TimeoutExpired` depois do SIGKILL é só registrado: antes ele vazava e
+  derrubava a atualização com "Erro inesperado".
+
 ### Aviso de versão recomendada (modal depois de atualizar o WhatsBot-Lite)
 
 `GET /api/gowa/version` devolve, **só com arquivos e banco locais (sem GitHub, sem LLM)**,

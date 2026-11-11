@@ -1197,6 +1197,25 @@ check("POST /gowa/update (unsupported) -> requires_confirmation",
 # A malformed version must never reach the download URL builder.
 r = client.post("/api/gowa/update", json={"version": "../../etc/passwd"})
 check("POST /gowa/update (versão inválida) -> 400", r.status_code == 400)
+check("POST /gowa/update (erro genérico) -> sem error_code", "error_code" not in r.json())
+
+# CPU without the required instructions: the panel needs a code to show the
+# "old processor" notice instead of the generic toast.
+_orig_install = _gowa_updater.install
+_gowa_updater.install = lambda version, **_k: {
+    "ok": False, "version": version, "previous_version": "9.6.0", "rolled_back": False,
+    "message": _gowa_updater.CPU_UNSUPPORTED_MESSAGE,
+    "error_code": _gowa_updater.CPU_UNSUPPORTED_CODE,
+}
+try:
+    r = client.post("/api/gowa/update", json={"version": "9.9.0"})
+finally:
+    _gowa_updater.install = _orig_install
+check("POST /gowa/update (CPU incompatível) -> 400", r.status_code == 400)
+check("POST /gowa/update (CPU incompatível) -> error_code=cpu_unsupported",
+      r.json().get("error_code") == "cpu_unsupported", str(r.json()))
+check("POST /gowa/update (CPU incompatível) -> mensagem de processador antigo",
+      r.json().get("error") == _gowa_updater.CPU_UNSUPPORTED_MESSAGE)
 
 # Rollback with nothing to restore.
 r = client.post("/api/gowa/rollback")
