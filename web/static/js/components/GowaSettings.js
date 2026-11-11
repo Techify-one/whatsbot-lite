@@ -5,6 +5,7 @@ import {
   checkGowaUpdate,
   installGowaUpdate,
   rollbackGowa,
+  retryGowaCpu,
 } from '../services/api.js';
 import { createWebSocket } from '../services/websocket.js';
 import { GowaProxySettings } from './GowaProxySettings.js';
@@ -39,12 +40,19 @@ export function GowaSettings({ id, autoCheck, onAutoCheckChange, onNotify }) {
   const [progress, setProgress] = useState(null);
   const [confirmUnsupported, setConfirmUnsupported] = useState(false);
   const [confirmRollback, setConfirmRollback] = useState(false);
-  // "Old processor" notice: kept apart from generic toasts so it stays visible.
-  const [cpuNotice, setCpuNotice] = useState('');
+  // Hosting only: the compat build is still being compiled. Kept in the card
+  // (not a toast) so the person can read "come back in 30 minutes".
+  const [pendingNotice, setPendingNotice] = useState('');
 
+  // The "old processor" notice is NOT local state: the server remembers it
+  // (info.cpu_unsupported) so it survives reloads and stops the update offers.
   function handleFailure(res, fallback) {
     if (res && res.error_code === 'cpu_unsupported') {
-      setCpuNotice(res.error || res.message || '');
+      load(false);
+      return;
+    }
+    if (res && res.error_code === 'compat_pending') {
+      setPendingNotice(res.error || res.message || '');
       return;
     }
     if (onNotify) onNotify((res && (res.error || res.message)) || fallback);
@@ -76,7 +84,8 @@ export function GowaSettings({ id, autoCheck, onAutoCheckChange, onNotify }) {
         setProgress(null);
         setConfirmUnsupported(false);
         setConfirmRollback(false);
-        if (d && d.error_code === 'cpu_unsupported') setCpuNotice(d.message || '');
+        if (d && d.error_code === 'cpu_unsupported') { /* load() below shows the card notice */ }
+        else if (d && d.error_code === 'compat_pending') setPendingNotice(d.message || '');
         else if (onNotify && d && d.message) onNotify(d.message);
         load(false);
       },
@@ -91,7 +100,7 @@ export function GowaSettings({ id, autoCheck, onAutoCheckChange, onNotify }) {
       return;
     }
     setWorking(true);
-    setCpuNotice('');
+    setPendingNotice('');
     setProgress({ phase: 'downloading', progress: 0 });
     try {
       const res = await installGowaUpdate(info.latest_version, !info.latest_supported);
@@ -112,7 +121,7 @@ export function GowaSettings({ id, autoCheck, onAutoCheckChange, onNotify }) {
   async function handleInstallRecommended() {
     if (!info || !info.recommended_version) return;
     setWorking(true);
-    setCpuNotice('');
+    setPendingNotice('');
     setProgress({ phase: 'downloading', progress: 0 });
     try {
       const res = await installGowaUpdate(info.recommended_version, false);
@@ -126,6 +135,41 @@ export function GowaSettings({ id, autoCheck, onAutoCheckChange, onNotify }) {
       setWorking(false);
       setProgress(null);
     }
+  }
+
+  // Old processor: installs the last official GOWA that runs on it (9.7.0).
+  async function handleInstallCpuFallback() {
+    if (!info || !info.cpu_fallback_version) return;
+    setWorking(true);
+    setPendingNotice('');
+    setProgress({ phase: 'downloading', progress: 0 });
+    try {
+      const res = await installGowaUpdate(info.cpu_fallback_version, false);
+      if (!res || !res.ok) {
+        handleFailure(res, 'Falha ao instalar a versão compatível do GOWA.');
+        setWorking(false);
+        setProgress(null);
+      }
+    } catch (e) {
+      if (onNotify) onNotify('Falha ao instalar a versão compatível do GOWA.');
+      setWorking(false);
+      setProgress(null);
+    }
+  }
+
+  // "Testar de novo": forget the old-processor mark (e.g. after moving to a new computer).
+  async function handleCpuRetry() {
+    try {
+      const res = await retryGowaCpu();
+      if (!res || !res.ok) {
+        if (onNotify) onNotify((res && res.error) || 'Falha ao reativar as atualizações do GOWA.');
+        return;
+      }
+    } catch (e) {
+      if (onNotify) onNotify('Falha ao reativar as atualizações do GOWA.');
+      return;
+    }
+    await load(true);
   }
 
   async function handleRollback() {
@@ -149,6 +193,8 @@ export function GowaSettings({ id, autoCheck, onAutoCheckChange, onNotify }) {
     }
   }
 
+  const cpuOld = info?.cpu_unsupported === true;
+  const cpuFallback = info?.cpu_fallback_version || '';
   const installedKnown = info?.installed_version_known !== false;
   const installed = info ? (info.installed_version || '') : '...';
   const recommendedVersion = info?.recommended_version || '';
@@ -219,14 +265,14 @@ export function GowaSettings({ id, autoCheck, onAutoCheckChange, onNotify }) {
             </div>
 
             <div class="flex items-center gap-2">
-              <button
+              ${!cpuOld ? html`<button
                 onClick=${() => load(true)}
                 disabled=${checking || working}
                 class="px-3 py-2 bg-wa-panel hover:bg-wa-hover disabled:opacity-50 text-wa-text text-sm rounded-lg border border-wa-border transition-colors"
                 title="Verificar atualizações do GOWA"
               >
                 ${checking ? '...' : 'Verificar'}
-              </button>
+              </button>` : null}
               ${showRecommended && platformOk && !(updateAvailable && recommendedVersion === latest) ? html`
                 <button
                   onClick=${handleInstallRecommended}
@@ -286,10 +332,39 @@ export function GowaSettings({ id, autoCheck, onAutoCheckChange, onNotify }) {
             </div>
           ` : null}
 
-          ${cpuNotice && !working ? html`
+          ${cpuOld && !working ? html`
             <div id="gowa-cpu-notice" role="alert" class="mt-3 p-3 rounded-lg bg-amber-50 border border-amber-200 text-amber-800 text-xs leading-relaxed">
-              <strong class="block mb-1">Processador incompatível com esta versão do GOWA</strong>
-              ${cpuNotice}
+              <strong class="block mb-1">Ambiente incompatível com a versão do GOWA</strong>
+              ${info.cpu_message}
+              ${cpuFallback ? html`
+                <div class="mt-3">
+                  <button
+                    id="gowa-cpu-fallback"
+                    onClick=${handleInstallCpuFallback}
+                    disabled=${working}
+                    class="px-3 py-2 bg-blue-600 hover:bg-blue-700 disabled:opacity-50 text-white text-xs font-medium rounded-lg transition-colors"
+                  >
+                    Baixar a última versão compatível (${cpuFallback})
+                  </button>
+                </div>
+              ` : null}
+              <div class="mt-2">
+                <button
+                  id="gowa-cpu-retry"
+                  onClick=${handleCpuRetry}
+                  class="underline text-amber-700 hover:text-amber-900"
+                  title="Use se você trocou o Whatsbot-lite para um computador mais novo"
+                >
+                  Testar de novo
+                </button>
+              </div>
+            </div>
+          ` : null}
+
+          ${pendingNotice && !working ? html`
+            <div id="gowa-compat-pending" role="status" class="mt-3 p-3 rounded-lg bg-blue-50 border border-blue-200 text-blue-900 text-xs leading-relaxed">
+              <strong class="block mb-1">Atualização em preparação</strong>
+              ${pendingNotice}
             </div>
           ` : null}
 

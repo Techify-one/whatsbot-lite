@@ -313,6 +313,8 @@ function App({ onLogout, hasPassword }) {
   const [gowaProgress, setGowaProgress] = useState(null);
   const [gowaInstalling, setGowaInstalling] = useState(false);
   const [gowaCpuNotice, setGowaCpuNotice] = useState('');
+  const [gowaCpuFallback, setGowaCpuFallback] = useState('');
+  const [gowaPendingNotice, setGowaPendingNotice] = useState('');
   const [initialContactId, setInitialContactId] = useState(contactIdFromPath);
   const [initialMessageId, setInitialMessageId] = useState(contactMessageFromPath);
   const [wizardManual, setWizardManual] = useState(() => window.location.pathname === '/wizard');
@@ -544,6 +546,9 @@ function App({ onLogout, hasPassword }) {
       if (data && data.error_code === 'cpu_unsupported') {
         // Shown inside the modal, apart from the generic toast.
         setGowaCpuNotice(data.message || '');
+        setGowaCpuFallback(data.cpu_fallback_version || '');
+      } else if (data && data.error_code === 'compat_pending') {
+        setGowaPendingNotice(data.message || '');
       } else {
         setNotification(data && data.message ? data.message : '');
       }
@@ -605,11 +610,16 @@ function App({ onLogout, hasPassword }) {
     if (!gowaUpdate) return;
     setGowaInstalling(true);
     setGowaCpuNotice('');
+    setGowaCpuFallback('');
+    setGowaPendingNotice('');
     setGowaProgress({ phase: 'downloading', progress: 0 });
     try {
       const res = await installGowaUpdate(gowaUpdate.latest_version, forceUnsupported);
       if (res && res.error_code === 'cpu_unsupported') {
         setGowaCpuNotice(res.error || '');
+        setGowaCpuFallback(res.cpu_fallback_version || '');
+      } else if (res && res.error_code === 'compat_pending') {
+        setGowaPendingNotice(res.error || '');
       } else if (!res || !res.ok) {
         setNotification((res && res.error) || 'Falha ao atualizar o GOWA.');
       }
@@ -622,6 +632,30 @@ function App({ onLogout, hasPassword }) {
       setGowaProgress(null);
     }
   }, [gowaUpdate]);
+
+  // Button inside the old-processor notice: install the last GOWA that runs on it.
+  const handleGowaInstallFallback = useCallback(async (version) => {
+    if (!version) return;
+    setGowaInstalling(true);
+    setGowaCpuNotice('');
+    setGowaCpuFallback('');
+    setGowaProgress({ phase: 'downloading', progress: 0 });
+    try {
+      const res = await installGowaUpdate(version, false);
+      if (res && res.ok) {
+        setGowaUpdate(null);
+      } else if (res && res.error_code === 'cpu_unsupported') {
+        setGowaCpuNotice(res.error || '');
+      } else {
+        setNotification((res && res.error) || 'Falha ao instalar a versão compatível do GOWA.');
+      }
+    } catch (e) {
+      setNotification('Falha ao instalar a versão compatível do GOWA.');
+    } finally {
+      setGowaInstalling(false);
+      setGowaProgress(null);
+    }
+  }, []);
 
   const handleGowaSkip = useCallback(async (version) => {
     setGowaUpdate(null);
@@ -833,6 +867,9 @@ function App({ onLogout, hasPassword }) {
         installing=${gowaInstalling}
         progress=${gowaProgress}
         cpuNotice=${gowaCpuNotice}
+        cpuFallback=${gowaCpuFallback}
+        onInstallFallback=${handleGowaInstallFallback}
+        pendingNotice=${gowaPendingNotice}
         onUpdateNow=${handleGowaUpdateNow}
         onLater=${() => {
           if (gowaUpdate.mode === MODE_RECOMMENDED) {

@@ -755,8 +755,26 @@ if (OS_, ARCH) == ("linux", "amd64"):
             res = gowa_updater.install("9.10.0", manager=MagicMock(), client=client)
         check("compat ausente -> falha sem rollback (nada foi trocado)",
               res["ok"] is False and res["rolled_back"] is False, str(res))
-        check("compat ausente -> mensagem genérica", res["message"] == gowa_updater._GENERIC_UPDATE_FAILURE)
+        check("compat ainda não compilado -> aviso de 'retorne em 30 minutos'",
+              res["message"] == gowa_updater.COMPAT_PENDING_MESSAGE
+              and "30 minutos" in res["message"], str(res))
+        check("compat ainda não compilado -> error_code=compat_pending",
+              res.get("error_code") == "compat_pending", str(res))
         check("compat ausente -> binário atual intacto",
+              gowa_binary.managed_binary_path().read_bytes() == before)
+
+        # zip já publicado mas checksums.txt ainda sem a linha (publicação em curso)
+        publish("9.12.0")
+        _asset12 = "whatsapp_9.12.0_linux_amd64_compat.zip"
+        with zipfile.ZipFile(COMPAT / _asset12, "w") as zf:
+            zf.writestr("linux-amd64", "#!/bin/sh\nexit 0\n")
+        patcher, calls = _first_fails()
+        with patcher:
+            res = gowa_updater.install("9.12.0", manager=MagicMock(), client=client)
+        check("zip sem checksum ainda -> 'retorne em 30 minutos' (compat_pending)",
+              res["ok"] is False and res.get("error_code") == "compat_pending"
+              and res["message"] == gowa_updater.COMPAT_PENDING_MESSAGE, str(res))
+        check("zip sem checksum ainda -> binário atual intacto",
               gowa_binary.managed_binary_path().read_bytes() == before)
 
         # checksum adulterado -> recusa
@@ -824,6 +842,84 @@ check("SIGILL depois de subir: rollback feito", res["ok"] is False and res["roll
 check("SIGILL depois de subir: aviso de processador antigo",
       res.get("error_code") == "cpu_unsupported"
       and res["message"] == gowa_updater.CPU_UNSUPPORTED_MESSAGE, str(res))
+
+# ═══════════════════════════════════════════════════════════════════
+section("Processador antigo constatado: para de oferecer atualização + botão da última compatível")
+
+
+class FakeSettings(dict):
+    pass
+
+
+def _managed_at(version: str):
+    gowa_binary.managed_dir().mkdir(parents=True, exist_ok=True)
+    gowa_binary.managed_binary_path().write_bytes(b"#!/bin/sh\nexit 0\n")
+    gowa_binary.write_meta({"version": version, "installed_at": time.time()})
+
+
+st = FakeSettings()
+check("sem marca: cpu_unsupported=False", gowa_updater.cpu_unsupported_info("9.6.0", "managed", st)["cpu_unsupported"] is False)
+check("a última versão compatível é a 9.7.0", gowa_updater.LAST_CPU_COMPATIBLE_VERSION == "9.7.0")
+
+gowa_updater.mark_cpu_unsupported(st, "9.9.0")
+info = gowa_updater.cpu_unsupported_info("9.6.0", "managed", st)
+check("com marca: cpu_unsupported=True e guarda a versão que falhou",
+      info["cpu_unsupported"] is True and info["cpu_unsupported_version"] == "9.9.0", str(info))
+check("instalada 9.6.0 (<9.7.0): oferece o botão da 9.7.0", info["cpu_fallback_version"] == "9.7.0", str(info))
+check("a mensagem do aviso é a do texto novo (equipe Techify)",
+      "contato com a equipe Techify" in info["cpu_message"] and "Veja os requisitos" not in info["cpu_message"])
+check("instalada 9.7.0: NÃO oferece botão (já está na última compatível)",
+      gowa_updater.cpu_unsupported_info("9.7.0", "managed", st)["cpu_fallback_version"] == "")
+check("instalada 9.8.0 (de uma máquina que funcionou): NÃO oferece a 9.7.0 (seria downgrade)",
+      gowa_updater.cpu_unsupported_info("9.8.0", "managed", st)["cpu_fallback_version"] == "")
+check("versão instalada desconhecida: NÃO oferece botão",
+      gowa_updater.cpu_unsupported_info("", "bundled", st)["cpu_fallback_version"] == "")
+check("binário fixado por env: NÃO oferece botão",
+      gowa_updater.cpu_unsupported_info("9.6.0", "env", st)["cpu_fallback_version"] == "")
+
+# check(): nenhuma consulta ao GitHub, nenhum aviso de versão nova
+_calls = {"n": 0}
+_orig_fetch_latest = gowa_updater.fetch_latest_release
+
+
+def _boom(*a, **k):
+    _calls["n"] += 1
+    raise AssertionError("não deveria consultar o GitHub com a CPU marcada")
+
+
+gowa_updater.fetch_latest_release = _boom
+try:
+    res = gowa_updater.check(st, True)
+finally:
+    gowa_updater.fetch_latest_release = _orig_fetch_latest
+check("check() com a CPU marcada não consulta o GitHub", _calls["n"] == 0)
+check("check() com a CPU marcada: update_available=False e sem 'whatsapp_update_recommended'",
+      res["update_available"] is False and res["whatsapp_update_recommended"] is False and res["latest_version"] == "", str(res))
+check("check() com a CPU marcada devolve cpu_unsupported=True", res["cpu_unsupported"] is True)
+
+# recomendação local (modal pós-atualização) também some
+_rec_ok = gowa_updater.recommended_info("8.8.0", "managed", FakeSettings())
+check("sem marca: recomendação local continua funcionando (sanidade)", _rec_ok["recommended_update_available"] in (True, False))
+rec = gowa_updater.recommended_info("8.8.0", "managed", st)
+check("com a marca: recomendação local nunca fica disponível", rec["recommended_update_available"] is False, str(rec))
+
+# "Testar de novo" limpa a marca e volta a consultar
+gowa_updater.clear_cpu_unsupported(st)
+check("Testar de novo: marca limpa", gowa_updater.cpu_unsupported_info("9.6.0", "managed", st)["cpu_unsupported"] is False)
+gowa_updater.fetch_latest_release = lambda force=False: {
+    "version": "9.9.0", "url": "", "notes": "", "published_at": "", "rate_limited": False}
+try:
+    res = gowa_updater.check(st, True)
+finally:
+    gowa_updater.fetch_latest_release = _orig_fetch_latest
+check("depois de Testar de novo: volta a consultar o GitHub", res["latest_version"] == "9.9.0", str(res))
+
+# a 9.7.0 pode ser instalada normalmente quando a CPU é antiga (sem plano B)
+shutil.rmtree(gowa_binary.managed_dir(), ignore_errors=True)
+publish("9.7.0")
+with _fake_run(0):
+    res = gowa_updater.install("9.7.0", manager=MagicMock(), client=client)
+check("o botão da 9.7.0 instala (binário baseline passa no smoke test)", res["ok"] is True, str(res))
 
 # ═══════════════════════════════════════════════════════════════════
 section("manager.stop(): TimeoutExpired depois do SIGKILL não vaza")

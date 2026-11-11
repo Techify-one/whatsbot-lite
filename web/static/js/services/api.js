@@ -482,6 +482,11 @@ export async function rollbackGowa() {
   return request('POST', '/api/gowa/rollback');
 }
 
+// "Testar de novo" on the old-processor notice: forget the mark and offer updates again.
+export async function retryGowaCpu() {
+  return request('POST', '/api/gowa/cpu-retry');
+}
+
 export async function getGowaProxy() {
   return request('GET', '/api/gowa/proxy');
 }

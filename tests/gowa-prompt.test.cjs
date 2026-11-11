@@ -105,3 +105,15 @@ test('one modal at a time: a different kind never replaces the open one', async 
     const refreshed = {mode: MODE_RECOMMENDED, latest_version: '9.7.0'};
     assert.equal(nextPrompt(rec, refreshed), refreshed, 'same kind refreshes its data');
 });
+
+test('processador antigo marcado: nenhum modal automatico abre', async () => {
+    const {recommendedPrompt, compatPrompt} = await load();
+    assert.ok(recommendedPrompt(versionPayload()));  // sanidade: sem a marca abre
+    assert.equal(recommendedPrompt(versionPayload({cpu_unsupported: true})), null);
+    const check = {
+        update_available: true, latest_supported: true, whatsapp_update_recommended: true,
+        latest_version: '9.9.0', installed_version: '9.6.0', skipped_version: '',
+    };
+    assert.ok(compatPrompt(check));
+    assert.equal(compatPrompt({...check, cpu_unsupported: true}), null);
+});

@@ -20,6 +20,9 @@ export const MODE_COMPAT = 'compat';
  */
 export function recommendedPrompt(v) {
   if (!v || !v.recommended_version) return null;
+  // The CPU is already known to be too old: no proactive GOWA modals, ever. The
+  // card in Configurações explains it (and offers the last compatible version).
+  if (v.cpu_unsupported === true) return null;
   if (v.recommended_update_available !== true) return null;
   // Out-of-range versions never open a proactive modal (they need the manual,
   // two-click path in the GOWA card).
@@ -54,6 +57,7 @@ export function postponedRecommendation(version, rec) {
  */
 export function compatPrompt(d) {
   if (!d || !d.update_available || !d.latest_supported) return null;
+  if (d.cpu_unsupported === true) return null;
   if (d.whatsapp_update_recommended !== true) return null;
   if (d.latest_version && d.latest_version === d.skipped_version) return null;
   // Same version the person just postponed: do not ask twice.

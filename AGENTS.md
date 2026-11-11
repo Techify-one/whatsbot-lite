@@ -453,9 +453,25 @@ O mesmo erro sai quando o GOWA novo **sobe e morre** por instrução ilegal (rol
   `file:///opt/gowa-compat` (pasta do host montada **somente leitura**). `compat_base_url()` aceita só
   `file://` e `https://`; a URL final é montada no servidor a partir da versão validada pela regex.
 - **Sem plano B** (Windows, Mac, Coolify, Linux próprio): a versão atual é mantida e a resposta traz
-  `error_code: "cpu_unsupported"` + `CPU_UNSUPPORTED_MESSAGE`. O `GowaSettings` e o `GowaUpdateModal`
-  mostram esse aviso em âmbar, separado do toast genérico. Compat ausente ou checksum inválido mantém a
-  mensagem genérica.
+  `error_code: "cpu_unsupported"` + `CPU_UNSUPPORTED_MESSAGE`.
+- **CPU antiga constatada = marca no banco** (`gowa_cpu_unsupported`, guarda a versão que falhou). Quem grava é
+  a rota `POST /api/gowa/update` (`mark_cpu_unsupported`), só no erro `cpu_unsupported`. Com a marca:
+  `check()` devolve logo, **sem GitHub e sem LLM**; `recommended_info()` deixa de recomendar;
+  `compatPrompt`/`recommendedPrompt` (frontend) não abrem modal; o card some com "Verificar", "Última",
+  "Atualizar para" e mostra um aviso **fixo** (`#gowa-cpu-notice`) com o texto "…Se precisar de ajuda entre em
+  contato com a equipe Techify." O banco guarda a marca, então ela sobrevive a recarregar a página.
+- **Botão da última versão compatível.** `LAST_CPU_COMPATIBLE_VERSION = "9.7.0"` (a última oficial sem AVX2:
+  a 9.8.0 passou a exigir `x86-64-v3`). `cpu_unsupported_info()` devolve `cpu_fallback_version` só quando a
+  instalada é **menor** que ela (nunca faz downgrade, nunca com versão desconhecida ou binário fixado por env).
+  O botão chama o mesmo `POST /api/gowa/update` com essa versão. **Ao subir `LAST_CPU_COMPATIBLE_VERSION`,
+  confira com `readelf -n` que o oficial novo ainda diz `x86-64-baseline`.**
+- **"Testar de novo"** (`POST /api/gowa/cpu-retry`) limpa a marca, para quem trocou de computador. Se a CPU
+  ainda for antiga, a próxima tentativa falha no smoke test e marca de novo.
+- **Compat ainda não compilado (só hospedagem).** Se o zip `_compat.zip` não existe na pasta (404 / arquivo
+  inexistente) **ou** existe mas o `checksums.txt` ainda não tem a linha dele (o build grava o checksum por
+  último), a resposta traz `error_code: "compat_pending"` + `COMPAT_PENDING_MESSAGE` ("…retorne daqui a 30
+  minutos…"). **Não** marca a CPU como antiga e **não** conta como falha. Checksum que não confere continua
+  sendo recusa com a mensagem de integridade; outras falhas do compat mantêm a mensagem genérica.
 - **O compat é o código oficial da tag**, compilado no servidor com
   `CGO_ENABLED=1 GOAMD64=v1 CGO_CFLAGS="-O2 -march=x86-64 -mtune=generic"` (script
   `gowa-compat-build.sh` do `whatsbot-infra`). O hash dele **não** entra em `KNOWN_BINARY_HASHES`.

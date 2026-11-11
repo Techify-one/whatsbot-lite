@@ -1217,6 +1217,57 @@ check("POST /gowa/update (CPU incompatível) -> error_code=cpu_unsupported",
 check("POST /gowa/update (CPU incompatível) -> mensagem de processador antigo",
       r.json().get("error") == _gowa_updater.CPU_UNSUPPORTED_MESSAGE)
 
+# A CPU failure must be REMEMBERED by the server: the panel then shows the fixed
+# notice (with the 9.7.0 button) and stops offering GOWA updates.
+settings["gowa_cpu_unsupported"] = ""
+_gowa_updater.install = lambda version, **_k: {
+    "ok": False, "version": version, "previous_version": "", "rolled_back": False,
+    "message": _gowa_updater.CPU_UNSUPPORTED_MESSAGE,
+    "error_code": _gowa_updater.CPU_UNSUPPORTED_CODE,
+}
+try:
+    r = client.post("/api/gowa/update", json={"version": "9.9.0"})
+finally:
+    _gowa_updater.install = _orig_install
+check("CPU incompatível -> a marca fica gravada no servidor",
+      settings.get("gowa_cpu_unsupported") == "9.9.0", str(settings.get("gowa_cpu_unsupported")))
+check("CPU incompatível -> erro traz cpu_fallback_version", "cpu_fallback_version" in r.json(), str(r.json()))
+_gv = client.get("/api/gowa/version").json()["data"]
+check("GET /gowa/version -> cpu_unsupported=True depois da falha", _gv.get("cpu_unsupported") is True, str(_gv))
+check("GET /gowa/version -> cpu_message é o texto novo (equipe Techify)",
+      "equipe Techify" in _gv.get("cpu_message", ""), str(_gv.get("cpu_message")))
+check("GET /gowa/version -> sem recomendação local com a CPU marcada",
+      _gv.get("recommended_update_available") is False, str(_gv))
+_ck = client.get("/api/gowa/update/check").json()["data"]
+check("GET /gowa/update/check -> cpu_unsupported e nenhuma atualização oferecida",
+      _ck.get("cpu_unsupported") is True and _ck.get("update_available") is False
+      and _ck.get("whatsapp_update_recommended") is False, str(_ck))
+
+# Other failures never set the mark.
+settings["gowa_cpu_unsupported"] = ""
+_gowa_updater.install = lambda version, **_k: {
+    "ok": False, "version": version, "previous_version": "", "rolled_back": False,
+    "message": _gowa_updater.COMPAT_PENDING_MESSAGE, "error_code": _gowa_updater.COMPAT_PENDING_CODE,
+}
+try:
+    r = client.post("/api/gowa/update", json={"version": "9.9.0"})
+finally:
+    _gowa_updater.install = _orig_install
+check("compat ainda não compilado -> 400 com error_code=compat_pending",
+      r.status_code == 400 and r.json().get("error_code") == "compat_pending", str(r.json()))
+check("compat ainda não compilado -> mensagem 'retorne daqui a 30 minutos'",
+      "30 minutos" in r.json().get("error", ""), str(r.json()))
+check("compat ainda não compilado -> NÃO marca a CPU como antiga",
+      not settings.get("gowa_cpu_unsupported"))
+
+# "Testar de novo" clears the mark.
+settings["gowa_cpu_unsupported"] = "9.9.0"
+r = client.post("/api/gowa/cpu-retry")
+check("POST /gowa/cpu-retry -> 200", r.status_code == 200, str(r.text[:120]))
+check("POST /gowa/cpu-retry -> marca limpa", not settings.get("gowa_cpu_unsupported"))
+check("POST /gowa/cpu-retry -> cpu_unsupported=False na resposta",
+      r.json()["data"].get("cpu_unsupported") is False)
+
 # Rollback with nothing to restore.
 r = client.post("/api/gowa/rollback")
 check("POST /gowa/rollback (sem backup) -> 400", r.status_code == 400)

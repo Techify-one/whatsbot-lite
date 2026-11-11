@@ -29,8 +29,13 @@ export function GowaUpdateModal({
   evidence = [],
   installing = false,
   progress = null,
-  // "Old processor" notice from the backend (error_code cpu_unsupported).
+  // "Old processor" notice from the backend (error_code cpu_unsupported) and the
+  // last GOWA that runs on it (offered as a button; '' = nothing to offer).
   cpuNotice = '',
+  cpuFallback = '',
+  onInstallFallback,
+  // Hosting only: the compat build is still being compiled ("come back in 30 min").
+  pendingNotice = '',
   onUpdateNow,
   onLater,
   onSkip,
@@ -148,8 +153,25 @@ export function GowaUpdateModal({
 
         ${cpuNotice && !installing ? html`
           <div role="alert" class="mb-4 p-3 rounded-lg bg-amber-50 border border-amber-200 text-amber-800 text-xs leading-relaxed">
-            <strong class="block mb-1">Processador incompatível com esta versão do GOWA</strong>
+            <strong class="block mb-1">Ambiente incompatível com a versão do GOWA</strong>
             ${cpuNotice}
+            ${cpuFallback ? html`
+              <div class="mt-3">
+                <button
+                  onClick=${() => onInstallFallback && onInstallFallback(cpuFallback)}
+                  class="px-3 py-2 bg-blue-600 hover:bg-blue-700 text-white text-xs font-medium rounded-lg transition-colors"
+                >
+                  Baixar a última versão compatível (${cpuFallback})
+                </button>
+              </div>
+            ` : null}
+          </div>
+        ` : null}
+
+        ${pendingNotice && !installing && !cpuNotice ? html`
+          <div role="status" class="mb-4 p-3 rounded-lg bg-blue-50 border border-blue-200 text-blue-900 text-xs leading-relaxed">
+            <strong class="block mb-1">Atualização em preparação</strong>
+            ${pendingNotice}
           </div>
         ` : null}
 
@@ -171,12 +193,12 @@ export function GowaUpdateModal({
           </div>
         ` : html`
           <div class="flex flex-col gap-2">
-            <button
+            ${!cpuNotice ? html`<button
               onClick=${handleUpdate}
               class="w-full text-center py-2.5 px-4 ${confirmUnsupported ? 'bg-amber-600 hover:bg-amber-700' : 'bg-wa-teal hover:bg-wa-tealDark'} text-white font-medium rounded-lg transition-colors"
             >
               ${confirmUnsupported ? 'Sim, instalar mesmo assim' : 'Atualizar agora'}
-            </button>
+            </button>` : null}
             <button
               onClick=${handleClose}
               class="w-full text-center py-2.5 px-4 bg-wa-panel hover:bg-wa-hover text-wa-text rounded-lg transition-colors"

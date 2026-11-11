@@ -92,7 +92,25 @@ CPU_UNSUPPORTED_CODE = "cpu_unsupported"
 CPU_UNSUPPORTED_MESSAGE = (
     "Este computador tem um processador antigo demais para esta versão do GOWA "
     "(motor do WhatsApp). A versão atual foi mantida e continua funcionando. "
-    "Veja os requisitos mínimos na ajuda."
+    "Se precisar de ajuda entre em contato com a equipe Techify."
+)
+
+# Last official GOWA that runs on CPUs without AVX2 (checked by running the Linux
+# binaries on such a CPU: 9.8.0 and later need x86-64-v3 and refuse to start).
+# The panel offers it as a button once the CPU is known to be old.
+LAST_CPU_COMPATIBLE_VERSION = "9.7.0"
+
+# Once an install proves the CPU is too old, this setting keeps the panel from
+# offering newer GOWA versions again (value = the version that failed).
+# "Testar de novo" in the panel clears it (e.g. after moving to a new computer).
+CPU_FLAG_KEY = "gowa_cpu_unsupported"
+
+# Hosting only: the compat build of this version has not been published yet (the
+# server's timer compiles it, usually within 30 minutes).
+COMPAT_PENDING_CODE = "compat_pending"
+COMPAT_PENDING_MESSAGE = (
+    "Estamos verificando e baixando a nova versão do GOWA, retorne daqui a 30 minutos "
+    "para a atualização ser concluída. A versão atual continua funcionando."
 )
 
 # How an illegal-instruction crash shows up in subprocess.returncode:
@@ -105,6 +123,47 @@ def is_illegal_instruction_exit(returncode) -> bool:
     if not isinstance(returncode, int):
         return False
     return returncode == _SIGILL_RC or (returncode & 0xFFFFFFFF) == _WIN_ILLEGAL_INSTRUCTION
+
+
+def cpu_unsupported_version(settings) -> str:
+    """Version that proved this CPU too old ('' = never flagged)."""
+    if not settings:
+        return ""
+    return str(settings.get(CPU_FLAG_KEY, "") or "").strip()
+
+
+def mark_cpu_unsupported(settings, version: str) -> None:
+    """Remember the CPU is too old: the panel stops offering newer GOWA versions."""
+    if settings is not None:
+        settings[CPU_FLAG_KEY] = version or "?"
+        logger.warning("CPU marked as too old for GOWA %s: update notices are now off.", version)
+
+
+def clear_cpu_unsupported(settings) -> None:
+    """"Testar de novo": offer GOWA updates again (e.g. after moving to a new computer)."""
+    if settings is not None:
+        settings[CPU_FLAG_KEY] = ""
+
+
+def cpu_unsupported_info(installed: str, source: str, settings) -> dict:
+    """What the panel needs to show the persistent "old processor" notice."""
+    failed = cpu_unsupported_version(settings)
+    flagged = bool(failed)
+    # Offer the last compatible version only when it would actually be an upgrade
+    # (a binary nobody could identify, or one pinned by env, is never swapped).
+    offer = (
+        flagged
+        and source != "env"
+        and gowa_binary.is_known_version(installed)
+        and gowa_binary.version_cmp(installed, LAST_CPU_COMPATIBLE_VERSION) < 0
+        and detect_platform() is not None
+    )
+    return {
+        "cpu_unsupported": flagged,
+        "cpu_unsupported_version": failed,
+        "cpu_fallback_version": LAST_CPU_COMPATIBLE_VERSION if offer else "",
+        "cpu_message": CPU_UNSUPPORTED_MESSAGE if flagged else "",
+    }
 
 # GOWA writes the WhatsApp session here (NOT storages/whatsbot.db, which is
 # ours). A major upgrade can migrate this schema irreversibly, so we snapshot it
@@ -119,11 +178,25 @@ class GowaUpdateBusy(RuntimeError):
 class GowaUpdateError(RuntimeError):
     """User-facing failure during an update."""
 
+    # Machine-readable reason the panel uses to pick a notice ("" = generic).
+    error_code = ""
+
 
 class GowaCpuIsaError(GowaUpdateError):
     """The downloaded binary needs a newer CPU instruction set (e.g. AVX2)."""
 
+    error_code = CPU_UNSUPPORTED_CODE
+
     def __init__(self, message: str = CPU_UNSUPPORTED_MESSAGE):
+        super().__init__(message)
+
+
+class GowaCompatPendingError(GowaUpdateError):
+    """Hosting: the compat build for this version is not on the shared folder yet."""
+
+    error_code = COMPAT_PENDING_CODE
+
+    def __init__(self, message: str = COMPAT_PENDING_MESSAGE):
         super().__init__(message)
 
 
@@ -485,6 +558,7 @@ def recommended_info(installed: str, source: str, settings) -> dict:
     available = (
         bool(recommended)
         and source != "env"
+        and not cpu_unsupported_version(settings)
         and gowa_binary.version_cmp(recommended, installed) > 0
     )
     return {
@@ -531,6 +605,13 @@ def check(settings, force: bool = False) -> dict:
         "assessment_error": "",
         "assessed_versions": [],
     }
+
+    # A CPU already proven too old gets no update checks: no GitHub call, no LLM,
+    # no "new version" notices. The notice with the fallback button replaces them.
+    cpu = cpu_unsupported_info(installed, source, settings)
+    result.update(cpu)
+    if cpu["cpu_unsupported"]:
+        return result
 
     try:
         latest = fetch_latest_release(force=force)
@@ -624,6 +705,15 @@ def _download(url: str, dest: Path, on_progress=None, label: str = "") -> Path:
         dest.unlink(missing_ok=True)
         raise GowaUpdateError(f"Falha ao baixar {url}: {exc}") from exc
     return dest
+
+
+def _is_missing_remote(exc) -> bool:
+    """True when a download failed because the file is simply not there (404 / no such file)."""
+    if isinstance(exc, urllib.error.HTTPError):
+        return exc.code == 404
+    if isinstance(exc, urllib.error.URLError):
+        return isinstance(exc.reason, FileNotFoundError)
+    return False
 
 
 def _fetch_checksums(version: str, os_: str) -> dict[str, str]:
@@ -964,13 +1054,22 @@ def install(version: str, *, manager, client, on_progress=None,
             try:
                 _download(f"{base}/{asset}", zip_path, report, version)
             except GowaUpdateError as exc:
+                if _is_missing_remote(exc.__cause__):
+                    # Not compiled yet: the server's timer publishes it soon.
+                    logger.warning("Compat GOWA %s is not published yet: %s", version, exc)
+                    raise GowaCompatPendingError() from exc
                 logger.error("Compat GOWA %s unavailable: %s", version, exc)
                 raise GowaUpdateError(_GENERIC_UPDATE_FAILURE) from exc
             report("verifying", 100, version)
             _set_state("running", "verifying", 100, version)
             expected = _fetch_compat_checksums(base).get(asset, "")
+            if not expected:
+                # checksums.txt is written LAST when publishing, so a zip without
+                # its line is a build still being published.
+                logger.warning("Compat GOWA %s has no published checksum yet.", version)
+                raise GowaCompatPendingError()
             actual = _sha256(zip_path)
-            if not expected or actual != expected:
+            if actual != expected:
                 logger.error("Compat GOWA %s checksum %s (expected %r); refusing.",
                              version, actual, expected)
                 raise GowaUpdateError(
@@ -1078,7 +1177,7 @@ def install(version: str, *, manager, client, on_progress=None,
             "previous_version": previous_version,
             "rolled_back": rolled_back,
             "message": message,
-            "error_code": CPU_UNSUPPORTED_CODE if isinstance(exc, GowaCpuIsaError) else "",
+            "error_code": getattr(exc, "error_code", "") if isinstance(exc, GowaUpdateError) else "",
         }
     finally:
         shutil.rmtree(tmp_root, ignore_errors=True)

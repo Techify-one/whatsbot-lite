@@ -64,6 +64,7 @@ def register_routes(app, deps):
             "binary_path": str(path),
             "platform_supported": combo is not None,
             **gowa_updater.recommended_info(installed, source, settings),
+            **gowa_updater.cpu_unsupported_info(installed, source, settings),
         }
 
     @app.get("/api/gowa/version")
@@ -98,6 +99,14 @@ def register_routes(app, deps):
         except gowa_updater.GowaUpdateBusy as exc:
             return _err(str(exc), status=409)
 
+        # The CPU is proven too old: remember it BEFORE answering/broadcasting, so
+        # the panel's next read already shows the persistent notice and stops
+        # offering GOWA updates. (Plan B in the hosting never gets here.)
+        if (not result.get("ok")
+                and result.get("error_code") == gowa_updater.CPU_UNSUPPORTED_CODE):
+            await asyncio.to_thread(
+                gowa_updater.mark_cpu_unsupported, settings, result.get("version", ""))
+
         result.update(await asyncio.to_thread(_version_payload))
         await ws_manager.broadcast("gowa_update_done", {
             "ok": result.get("ok", False),
@@ -106,6 +115,7 @@ def register_routes(app, deps):
             "rolled_back": result.get("rolled_back", False),
             "message": result.get("message", ""),
             "error_code": result.get("error_code", ""),
+            "cpu_fallback_version": result.get("cpu_fallback_version", ""),
         })
 
         if not result.get("ok"):
@@ -114,7 +124,11 @@ def register_routes(app, deps):
                 return _ok(result)
             # error_code lets the panel show the "old processor" notice apart
             # from generic failures.
-            extra = {"error_code": result["error_code"]} if result.get("error_code") else {}
+            extra = {}
+            if result.get("error_code"):
+                extra["error_code"] = result["error_code"]
+                # Lets the modal offer the last compatible version right away.
+                extra["cpu_fallback_version"] = result.get("cpu_fallback_version", "")
             return _err(result.get("message", "Falha ao atualizar o GOWA."), **extra)
         return _ok(result)
 
@@ -236,6 +250,17 @@ def register_routes(app, deps):
         result["proxy"] = gowa_proxy.mask_url(url)
         result["supported"] = gowa_proxy.supports_proxy()
         return _ok(result)
+
+    @app.post("/api/gowa/cpu-retry")
+    async def gowa_cpu_retry():
+        """"Testar de novo": forget the old-processor mark and offer updates again.
+
+        For a person who moved the Whatsbot-lite to a newer computer. If the CPU is
+        still old, the next update attempt fails the smoke test and marks it again.
+        """
+        await asyncio.to_thread(gowa_updater.clear_cpu_unsupported, settings)
+        logger.info("Old-processor mark cleared by the user; GOWA updates are offered again.")
+        return _ok(await asyncio.to_thread(_version_payload))
 
     @app.post("/api/gowa/skip-version")
     async def gowa_skip_version(body: dict):
