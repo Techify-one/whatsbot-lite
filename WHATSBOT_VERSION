@@ -1,6 +1,10 @@
 {
-  "version": "0.2.19",
+  "version": "0.2.20",
   "changelog": [
+    {
+      "version": "0.2.20",
+      "description": "- Atualização do GOWA para as versões 9.8 em diante em processadores antigos (sem AVX2) na hospedagem WhatsBot Cloud\n- Aviso claro quando o processador é antigo demais para a nova versão do GOWA; a versão atual continua funcionando\n- Correção: a atualização do GOWA podia falhar com \"Erro inesperado\" quando o servidor estava lento"
+    },
     {
       "version": "0.2.19",
       "description": "- Linux: o bash linux_start.sh agora pergunta na primeira vez se o WhatsBot-Lite deve rodar como serviço (liga sozinho quando o servidor reinicia) ou somente no terminal\n- Linux: o serviço whatsbot-lite reinicia sozinho em caso de falha e após atualizações, e pode ser removido com bash linux_start.sh service uninstall\n- Botão Voltar do app instalado no celular funciona como em um app nativo\n- Lista de conversas atualiza ao vivo quando uma conversa é apagada, arquivada ou fixada\n- Conexão em tempo real com o painel mais estável, com reconexão automática\n- Mensagens do sistema aparecem em um cartão recolhível e mensagens duplicadas não aparecem mais"
