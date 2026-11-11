@@ -105,13 +105,17 @@ def register_routes(app, deps):
             "previous_version": result.get("previous_version", ""),
             "rolled_back": result.get("rolled_back", False),
             "message": result.get("message", ""),
+            "error_code": result.get("error_code", ""),
         })
 
         if not result.get("ok"):
             # A pending confirmation is not an error, it is a 200 the UI acts on.
             if result.get("requires_confirmation"):
                 return _ok(result)
-            return _err(result.get("message", "Falha ao atualizar o GOWA."))
+            # error_code lets the panel show the "old processor" notice apart
+            # from generic failures.
+            extra = {"error_code": result["error_code"]} if result.get("error_code") else {}
+            return _err(result.get("message", "Falha ao atualizar o GOWA."), **extra)
         return _ok(result)
 
     @app.post("/api/gowa/rollback")

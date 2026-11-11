@@ -29,6 +29,8 @@ export function GowaUpdateModal({
   evidence = [],
   installing = false,
   progress = null,
+  // "Old processor" notice from the backend (error_code cpu_unsupported).
+  cpuNotice = '',
   onUpdateNow,
   onLater,
   onSkip,
@@ -141,6 +143,13 @@ export function GowaUpdateModal({
             <strong>Versão não homologada.</strong> O Whatsbot-lite não foi testado com
             ela e a atualização pode quebrar o envio e o recebimento de mensagens.
             Se algo der errado, use o botão Reverter em Configurações.
+          </div>
+        ` : null}
+
+        ${cpuNotice && !installing ? html`
+          <div role="alert" class="mb-4 p-3 rounded-lg bg-amber-50 border border-amber-200 text-amber-800 text-xs leading-relaxed">
+            <strong class="block mb-1">Processador incompatível com esta versão do GOWA</strong>
+            ${cpuNotice}
           </div>
         ` : null}
 

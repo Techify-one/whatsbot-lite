@@ -312,6 +312,7 @@ function App({ onLogout, hasPassword }) {
   const [whatsbotUpdateError, setWhatsbotUpdateError] = useState('');
   const [gowaProgress, setGowaProgress] = useState(null);
   const [gowaInstalling, setGowaInstalling] = useState(false);
+  const [gowaCpuNotice, setGowaCpuNotice] = useState('');
   const [initialContactId, setInitialContactId] = useState(contactIdFromPath);
   const [initialMessageId, setInitialMessageId] = useState(contactMessageFromPath);
   const [wizardManual, setWizardManual] = useState(() => window.location.pathname === '/wizard');
@@ -540,7 +541,12 @@ function App({ onLogout, hasPassword }) {
     onGowaUpdateDone: useCallback((data) => {
       setGowaInstalling(false);
       setGowaProgress(null);
-      setNotification(data && data.message ? data.message : '');
+      if (data && data.error_code === 'cpu_unsupported') {
+        // Shown inside the modal, apart from the generic toast.
+        setGowaCpuNotice(data.message || '');
+      } else {
+        setNotification(data && data.message ? data.message : '');
+      }
       if (data && data.ok) setGowaUpdate(null);
     }, []),
     onContactListEvent: useCallback((data) => setContactListEvent({ ...data, _t: Date.now() }), []),
@@ -598,10 +604,13 @@ function App({ onLogout, hasPassword }) {
   const handleGowaUpdateNow = useCallback(async (forceUnsupported) => {
     if (!gowaUpdate) return;
     setGowaInstalling(true);
+    setGowaCpuNotice('');
     setGowaProgress({ phase: 'downloading', progress: 0 });
     try {
       const res = await installGowaUpdate(gowaUpdate.latest_version, forceUnsupported);
-      if (!res || !res.ok) {
+      if (res && res.error_code === 'cpu_unsupported') {
+        setGowaCpuNotice(res.error || '');
+      } else if (!res || !res.ok) {
         setNotification((res && res.error) || 'Falha ao atualizar o GOWA.');
       }
     } catch (e) {
@@ -823,6 +832,7 @@ function App({ onLogout, hasPassword }) {
         evidence=${gowaUpdate.update_evidence}
         installing=${gowaInstalling}
         progress=${gowaProgress}
+        cpuNotice=${gowaCpuNotice}
         onUpdateNow=${handleGowaUpdateNow}
         onLater=${() => {
           if (gowaUpdate.mode === MODE_RECOMMENDED) {

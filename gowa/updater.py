@@ -43,6 +43,25 @@ GOWA_RELEASE_DOWNLOAD = (
 )
 GOWA_RELEASE_PAGE = f"https://github.com/{GOWA_GH_REPO}/releases/tag/v{{version}}"
 
+# Plan B for Linux amd64 CPUs without AVX2 (hosting only): the same upstream tag
+# rebuilt with x86-64 baseline compiler flags. There is NO default: only the
+# hosting sets WHATSBOT_GOWA_COMPAT_URL (``file:///opt/gowa-compat``, a read-only
+# bind mount). Without it, an incompatible CPU gets the "old processor" notice.
+_COMPAT_ENV = "WHATSBOT_GOWA_COMPAT_URL"
+_COMPAT_SCHEMES = ("file://", "https://")
+
+
+def compat_base_url() -> str:
+    """Validated compat base from the env, or '' when unset/invalid."""
+    base = os.environ.get(_COMPAT_ENV, "").strip().rstrip("/")
+    if not base:
+        return ""
+    if not base.lower().startswith(_COMPAT_SCHEMES) or any(c in base for c in "?#"):
+        logger.error("%s=%r ignored: only file:// or https:// bases are accepted.",
+                     _COMPAT_ENV, base)
+        return ""
+    return base
+
 # Versions the WhatsBot-Lite client is known to talk to. Anything outside this range
 # is still offered, but flagged as "não homologada": it needs an explicit
 # confirmation and never triggers the proactive modal.
@@ -68,6 +87,25 @@ _UA = "WhatsBot"
 # server log only: end users get no technical detail.
 _GENERIC_UPDATE_FAILURE = "Não foi possível atualizar o GOWA agora. A versão atual foi mantida."
 
+# Shown when the CPU lacks the instructions the new GOWA build needs (AVX2).
+CPU_UNSUPPORTED_CODE = "cpu_unsupported"
+CPU_UNSUPPORTED_MESSAGE = (
+    "Este computador tem um processador antigo demais para esta versão do GOWA "
+    "(motor do WhatsApp). A versão atual foi mantida e continua funcionando. "
+    "Veja os requisitos mínimos na ajuda."
+)
+
+# How an illegal-instruction crash shows up in subprocess.returncode:
+#   Linux/macOS: killed by SIGILL -> -4.  Windows: STATUS_ILLEGAL_INSTRUCTION.
+_SIGILL_RC = -4
+_WIN_ILLEGAL_INSTRUCTION = 0xC000001D   # 3221225501
+
+
+def is_illegal_instruction_exit(returncode) -> bool:
+    if not isinstance(returncode, int):
+        return False
+    return returncode == _SIGILL_RC or (returncode & 0xFFFFFFFF) == _WIN_ILLEGAL_INSTRUCTION
+
 # GOWA writes the WhatsApp session here (NOT storages/whatsbot.db, which is
 # ours). A major upgrade can migrate this schema irreversibly, so we snapshot it
 # before crossing a major boundary or the rollback button would be theatre.
@@ -80,6 +118,13 @@ class GowaUpdateBusy(RuntimeError):
 
 class GowaUpdateError(RuntimeError):
     """User-facing failure during an update."""
+
+
+class GowaCpuIsaError(GowaUpdateError):
+    """The downloaded binary needs a newer CPU instruction set (e.g. AVX2)."""
+
+    def __init__(self, message: str = CPU_UNSUPPORTED_MESSAGE):
+        super().__init__(message)
 
 
 _UPDATE_LOCK = threading.Lock()
@@ -600,6 +645,24 @@ def _fetch_checksums(version: str, os_: str) -> dict[str, str]:
     return sums
 
 
+def _fetch_compat_checksums(base: str) -> dict[str, str]:
+    """``{asset: sha256}`` from the compat base. Empty on any failure (= refuse)."""
+    url = f"{base}/checksums.txt"
+    req = urllib.request.Request(url, headers={"User-Agent": _UA})
+    try:
+        with urllib.request.urlopen(req, timeout=_API_TIMEOUT_SEC) as resp:
+            text = resp.read().decode("utf-8", errors="replace")
+    except (urllib.error.URLError, urllib.error.HTTPError, TimeoutError, OSError) as exc:
+        logger.warning("Could not fetch compat checksums (%s): %s", url, exc)
+        return {}
+    sums: dict[str, str] = {}
+    for line in text.splitlines():
+        parts = line.split()
+        if len(parts) >= 2:
+            sums[parts[-1]] = parts[0].lower()
+    return sums
+
+
 def _sha256(path: Path) -> str:
     digest = hashlib.sha256()
     with path.open("rb") as fh:
@@ -670,12 +733,16 @@ def _smoke_test(path: Path) -> None:
 
     output = (proc.stderr or b"") + (proc.stdout or b"")
     text = output.decode("utf-8", errors="replace")
-    if "cpu isa level" in text.lower():
+    # Three ways a CPU without the required instructions shows up:
+    #   Linux loader refuses the ISA note (text + exit 127),
+    #   Linux/macOS process killed by SIGILL (-4),
+    #   Windows STATUS_ILLEGAL_INSTRUCTION (0xC000001D).
+    if "cpu isa level" in text.lower() or is_illegal_instruction_exit(proc.returncode):
         logger.error(
             "Downloaded GOWA cannot run on this CPU (needs a newer instruction "
-            "set, e.g. AVX2): %s", text.strip()[:200],
+            "set, e.g. AVX2; exit %s): %s", proc.returncode, text.strip()[:200],
         )
-        raise GowaUpdateError(_GENERIC_UPDATE_FAILURE)
+        raise GowaCpuIsaError()
     if proc.returncode in (126, 127) and text.strip():
         logger.error(
             "Downloaded GOWA does not execute on this machine (exit %s): %s",
@@ -878,7 +945,44 @@ def install(version: str, *, manager, client, on_progress=None,
         _extract_binary(zip_path, inner_binary_name(os_, arch), staged)
         staged.chmod(0o755)
         _clear_quarantine(staged)
-        _smoke_test(staged)
+        flavor = "official"
+        try:
+            _smoke_test(staged)
+        except GowaCpuIsaError:
+            base = compat_base_url()
+            # Plan B only in the hosting (env set) and only on Linux amd64.
+            # Everyone else keeps the current version and sees the CPU notice.
+            if (os_, arch) != ("linux", "amd64") or not base:
+                raise
+            # The URL is built from the regex-validated version only (no client input).
+            logger.warning("Official GOWA %s needs a newer CPU; trying the compat build.",
+                           version)
+            asset = f"whatsapp_{version}_linux_amd64_compat.zip"
+            zip_path = tmp_root / asset
+            report("downloading", 0, version)
+            _set_state("running", "downloading", 0, version)
+            try:
+                _download(f"{base}/{asset}", zip_path, report, version)
+            except GowaUpdateError as exc:
+                logger.error("Compat GOWA %s unavailable: %s", version, exc)
+                raise GowaUpdateError(_GENERIC_UPDATE_FAILURE) from exc
+            report("verifying", 100, version)
+            _set_state("running", "verifying", 100, version)
+            expected = _fetch_compat_checksums(base).get(asset, "")
+            actual = _sha256(zip_path)
+            if not expected or actual != expected:
+                logger.error("Compat GOWA %s checksum %s (expected %r); refusing.",
+                             version, actual, expected)
+                raise GowaUpdateError(
+                    "O arquivo baixado não confere com o checksum publicado. "
+                    "Atualização cancelada."
+                )
+            staged.unlink(missing_ok=True)
+            _extract_binary(zip_path, inner_binary_name(os_, arch), staged)
+            staged.chmod(0o755)
+            _smoke_test(staged)
+            flavor = "compat"
+            logger.info("Compat GOWA %s passed the smoke test.", version)
 
         # 4. Snapshot the WhatsApp session before a major boundary.
         if _is_major_jump(previous_version, version):
@@ -905,6 +1009,7 @@ def install(version: str, *, manager, client, on_progress=None,
             "asset": asset,
             "sha256": actual,
             "checksum": "verified" if expected else "skipped",
+            "flavor": flavor,
             "supported": supported,
             "previous_version": previous_version,
             "previous_source": previous_source,
@@ -927,6 +1032,8 @@ def install(version: str, *, manager, client, on_progress=None,
                     "rolling back. Set WHATSBOT_GOWA_DEBUG=1 and read "
                     "logs/gowa.log for the reason.", version, code,
                 )
+                if is_illegal_instruction_exit(code):
+                    raise GowaCpuIsaError()
                 raise GowaUpdateError(_GENERIC_UPDATE_FAILURE)
             raise GowaUpdateError(
                 f"O GOWA {version} não respondeu em {_HEALTH_TIMEOUT_SEC}s após a atualização."
@@ -971,6 +1078,7 @@ def install(version: str, *, manager, client, on_progress=None,
             "previous_version": previous_version,
             "rolled_back": rolled_back,
             "message": message,
+            "error_code": CPU_UNSUPPORTED_CODE if isinstance(exc, GowaCpuIsaError) else "",
         }
     finally:
         shutil.rmtree(tmp_root, ignore_errors=True)

@@ -636,13 +636,237 @@ def _smoke(returncode, stderr=b""):
 
 
 msg = _smoke(127, b"./linux-amd64: CPU ISA level is lower than required\n")
-check("CPU sem AVX2 é recusada antes de trocar o binário, com texto neutro",
-      msg == gowa_updater._GENERIC_UPDATE_FAILURE, str(msg))
+check("CPU sem AVX2 é recusada antes de trocar o binário, com o aviso de processador antigo",
+      msg == gowa_updater.CPU_UNSUPPORTED_MESSAGE, str(msg))
 check("--help com código 1 e texto normal passa", _smoke(1, b"unknown flag") is None)
 check("--help com código 0 passa", _smoke(0) is None)
 check("loader 127 com mensagem é recusado, sem vazar o texto do sistema",
       _smoke(127, b"error while loading shared libraries") == gowa_updater._GENERIC_UPDATE_FAILURE)
 check("127 sem texto não é recusado (comportamento antigo)", _smoke(127, b"") is None)
+check("Linux/Mac: morto por SIGILL (-4) = CPU incompatível",
+      _smoke(-4) == gowa_updater.CPU_UNSUPPORTED_MESSAGE, str(_smoke(-4)))
+check("Windows: 0xC000001D (3221225501) = CPU incompatível",
+      _smoke(3221225501) == gowa_updater.CPU_UNSUPPORTED_MESSAGE)
+check("Windows: 0xC000001D como int negativo (-1073741795) = CPU incompatível",
+      _smoke(-1073741795) == gowa_updater.CPU_UNSUPPORTED_MESSAGE)
+check("SIGSEGV (-11) NÃO é tratado como CPU incompatível", _smoke(-11) is None)
+check("a mensagem de CPU é em português e não técnica",
+      "processador antigo" in gowa_updater.CPU_UNSUPPORTED_MESSAGE
+      and "AVX" not in gowa_updater.CPU_UNSUPPORTED_MESSAGE)
+
+# ═══════════════════════════════════════════════════════════════════
+section("Plano B: oficial sem AVX2 -> compat da pasta montada (só na hospedagem)")
+
+COMPAT = Path(tempfile.mkdtemp(prefix="whatsbot-gowa-compat-"))
+COMPAT_ENV = {"WHATSBOT_GOWA_COMPAT_URL": "file://" + str(COMPAT)}
+
+
+def publish_compat(version: str) -> None:
+    asset = f"whatsapp_{version}_linux_amd64_compat.zip"
+    zpath = COMPAT / asset
+    with zipfile.ZipFile(zpath, "w") as zf:
+        zf.writestr("linux-amd64", f"#!/bin/sh\nexit 0\n# compat {version}\n")
+    sha = hashlib.sha256(zpath.read_bytes()).hexdigest()
+    with (COMPAT / "checksums.txt").open("a") as fh:
+        fh.write(f"{sha}  {asset}\n")
+
+
+def _first_fails(rc=127, stderr=b"./linux-amd64: CPU ISA level is lower than required\n"):
+    """1a chamada (oficial) = CPU incompatível; as seguintes (compat) = ok."""
+    calls = {"n": 0}
+
+    def run(*_a, **_k):
+        calls["n"] += 1
+        if calls["n"] == 1:
+            return _sp.CompletedProcess([], rc, stdout=b"", stderr=stderr)
+        return _sp.CompletedProcess([], 0, stdout=b"usage", stderr=b"")
+    return mock.patch.object(gowa_updater.subprocess, "run", side_effect=run), calls
+
+
+def _download_spy():
+    urls = []
+    real = gowa_updater._download
+
+    def spy(url, *a, **k):
+        urls.append(url)
+        return real(url, *a, **k)
+    return mock.patch.object(gowa_updater, "_download", side_effect=spy), urls
+
+
+# --- sem env: plano B não existe -------------------------------------
+with mock.patch.dict(os.environ, {}, clear=False):
+    os.environ.pop("WHATSBOT_GOWA_COMPAT_URL", None)
+    check("sem a env não há base compat (sem endereço padrão)", gowa_updater.compat_base_url() == "")
+for bad in ["http://10.0.0.1/x", "ftp://x/y", "/opt/gowa-compat", "file:///opt/x?y=1", "javascript:x"]:
+    with mock.patch.dict(os.environ, {"WHATSBOT_GOWA_COMPAT_URL": bad}):
+        check(f"base inválida ignorada: {bad!r}", gowa_updater.compat_base_url() == "")
+for good in ["file:///opt/gowa-compat", "file:///opt/gowa-compat/", "https://x.example/gowa-compat"]:
+    with mock.patch.dict(os.environ, {"WHATSBOT_GOWA_COMPAT_URL": good}):
+        check(f"base aceita: {good!r}", gowa_updater.compat_base_url() == good.rstrip("/"))
+
+if (OS_, ARCH) == ("linux", "amd64"):
+    shutil.rmtree(gowa_binary.managed_dir(), ignore_errors=True)
+    publish("9.9.0")
+    publish_compat("9.9.0")
+
+    # sem env + CPU incompatível -> aviso, compat nunca consultado
+    os.environ.pop("WHATSBOT_GOWA_COMPAT_URL", None)
+    patcher, calls = _first_fails()
+    spy, urls = _download_spy()
+    with patcher, spy:
+        res = gowa_updater.install("9.9.0", manager=MagicMock(), client=client)
+    check("sem env: CPU incompatível falha sem trocar nada",
+          res["ok"] is False and res["rolled_back"] is False, str(res))
+    check("sem env: error_code=cpu_unsupported", res.get("error_code") == "cpu_unsupported", str(res))
+    check("sem env: mensagem de processador antigo", res["message"] == gowa_updater.CPU_UNSUPPORTED_MESSAGE)
+    check("sem env: compat nunca consultado", not any("compat" in u for u in urls), str(urls))
+    check("sem env: nada instalado", not gowa_binary.managed_binary_path().exists())
+
+    with mock.patch.dict(os.environ, COMPAT_ENV):
+        # file:// + cpu isa -> compat instala
+        patcher, calls = _first_fails()
+        spy, urls = _download_spy()
+        with patcher, spy:
+            res = gowa_updater.install("9.9.0", manager=MagicMock(), client=client)
+        meta = gowa_binary.read_meta()
+        check("file://: oficial falha com cpu isa -> compat instala", res["ok"] is True, str(res))
+        check("file://: download veio da pasta montada",
+              any(u.startswith("file://") and u.endswith("_compat.zip") for u in urls), str(urls))
+        check("smoke test rodou 2x (oficial + compat)", calls["n"] == 2, str(calls["n"]))
+        check("meta grava flavor=compat", meta.get("flavor") == "compat", str(meta))
+        check("meta grava checksum verificado", meta.get("checksum") == "verified", str(meta))
+        check("meta grava o asset compat", meta.get("asset", "").endswith("_compat.zip"), str(meta))
+        check("binário gerenciado é o compat",
+              b"compat 9.9.0" in gowa_binary.managed_binary_path().read_bytes())
+
+        # SIGILL também aciona o plano B
+        shutil.rmtree(gowa_binary.managed_dir(), ignore_errors=True)
+        patcher, calls = _first_fails(rc=-4, stderr=b"")
+        with patcher:
+            res = gowa_updater.install("9.9.0", manager=MagicMock(), client=client)
+        check("SIGILL (-4) no oficial -> compat instala", res["ok"] is True
+              and gowa_binary.read_meta().get("flavor") == "compat", str(res))
+
+        # compat inexistente -> mantém a versão atual, mensagem genérica
+        before = gowa_binary.managed_binary_path().read_bytes()
+        publish("9.10.0")
+        patcher, calls = _first_fails()
+        with patcher:
+            res = gowa_updater.install("9.10.0", manager=MagicMock(), client=client)
+        check("compat ausente -> falha sem rollback (nada foi trocado)",
+              res["ok"] is False and res["rolled_back"] is False, str(res))
+        check("compat ausente -> mensagem genérica", res["message"] == gowa_updater._GENERIC_UPDATE_FAILURE)
+        check("compat ausente -> binário atual intacto",
+              gowa_binary.managed_binary_path().read_bytes() == before)
+
+        # checksum adulterado -> recusa
+        publish("9.11.0")
+        publish_compat("9.11.0")
+        (COMPAT / "whatsapp_9.11.0_linux_amd64_compat.zip").write_bytes(b"adulterado")
+        patcher, calls = _first_fails()
+        with patcher:
+            res = gowa_updater.install("9.11.0", manager=MagicMock(), client=client)
+        check("compat com checksum errado é recusado", res["ok"] is False
+              and "checksum" in res["message"], str(res))
+        check("checksum errado -> binário atual intacto",
+              gowa_binary.managed_binary_path().read_bytes() == before)
+
+        # CPU nova: oficial passa, compat nunca é consultado
+        shutil.rmtree(gowa_binary.managed_dir(), ignore_errors=True)
+        spy, urls = _download_spy()
+        with _fake_run(0), spy:
+            res = gowa_updater.install("9.9.0", manager=MagicMock(), client=client)
+        check("CPU nova usa o oficial (flavor=official)",
+              res["ok"] and gowa_binary.read_meta().get("flavor") == "official", str(res))
+        check("CPU nova: compat nunca consultado", not any("compat" in u for u in urls), str(urls))
+
+# Windows / Mac nunca tentam o compat, mesmo com a env definida
+for plat in [("windows", "amd64"), ("darwin", "amd64"), ("darwin", "arm64"), ("linux", "arm64")]:
+    shutil.rmtree(gowa_binary.managed_dir(), ignore_errors=True)
+    asset = gowa_updater.asset_name("9.9.0", *plat)
+    zpath = RELEASE / asset
+    with zipfile.ZipFile(zpath, "w") as zf:
+        zf.writestr(gowa_updater.inner_binary_name(*plat), "#!/bin/sh\nexit 0\n")
+    _checksums[asset] = hashlib.sha256(zpath.read_bytes()).hexdigest()
+    rc = 3221225501 if plat[0] == "windows" else -4
+    (RELEASE / gowa_updater.checksums_asset(plat[0])).write_text(
+        "\n".join(f"{v}  {k}" for k, v in _checksums.items()) + "\n")
+    patcher, calls = _first_fails(rc=rc, stderr=b"")
+    spy, urls = _download_spy()
+    with mock.patch.dict(os.environ, COMPAT_ENV), patcher, spy, \
+         mock.patch.object(gowa_updater, "detect_platform", return_value=plat):
+        res = gowa_updater.install("9.9.0", manager=MagicMock(), client=client)
+    check(f"{'/'.join(plat)}: CPU incompatível vira aviso (rc={rc})",
+          res["ok"] is False and res.get("error_code") == "cpu_unsupported", str(res))
+    check(f"{'/'.join(plat)}: compat nunca consultado", not any("compat" in u for u in urls), str(urls))
+
+shutil.rmtree(COMPAT, ignore_errors=True)
+
+# ═══════════════════════════════════════════════════════════════════
+section("GOWA novo que morre por instrução ilegal logo após subir: rollback + aviso de CPU")
+
+shutil.rmtree(gowa_binary.managed_dir(), ignore_errors=True)
+publish("9.9.0")
+
+
+class SigillManager(DyingManager):
+    def start(self):
+        self.starts += 1
+        if self.starts == 1:
+            self.last_exit_code = -4
+            self.exit_count += 1
+
+
+sig_mgr = SigillManager()
+with _fake_run(0), mock.patch.object(gowa_updater, "_HEALTH_TIMEOUT_SEC", 45):
+    res = gowa_updater.install("9.9.0", manager=sig_mgr, client=DeadClient(sig_mgr))
+check("SIGILL depois de subir: rollback feito", res["ok"] is False and res["rolled_back"] is True, str(res))
+check("SIGILL depois de subir: aviso de processador antigo",
+      res.get("error_code") == "cpu_unsupported"
+      and res["message"] == gowa_updater.CPU_UNSUPPORTED_MESSAGE, str(res))
+
+# ═══════════════════════════════════════════════════════════════════
+section("manager.stop(): TimeoutExpired depois do SIGKILL não vaza")
+
+
+class _SlowProc:
+    """terminate() ignorado e wait() sempre estoura, como um processo não reapado."""
+
+    pid = 4242
+
+    def __init__(self):
+        self.killed = False
+        self.waits = []
+
+    def terminate(self):
+        pass
+
+    def kill(self):
+        self.killed = True
+
+    def wait(self, timeout=None):
+        self.waits.append(timeout)
+        raise _sp.TimeoutExpired(["gowa"], timeout)
+
+    def poll(self):
+        return None
+
+
+mgr = gowa_manager_mod.GOWAManager(port=3999, data_dir=Path(tempfile.mkdtemp()))
+slow = _SlowProc()
+mgr._process = slow
+mgr._running = True
+try:
+    mgr.stop()
+    leaked = None
+except Exception as exc:  # noqa: BLE001
+    leaked = exc
+check("stop() não levanta TimeoutExpired", leaked is None, repr(leaked))
+check("stop() mandou SIGKILL depois do SIGTERM", slow.killed is True)
+check("stop() usa os prazos novos (10s + 5s)",
+      slow.waits == [gowa_manager_mod.GOWA_STOP_TIMEOUT_SEC, gowa_manager_mod.GOWA_KILL_TIMEOUT_SEC]
+      and slow.waits == [10, 5], str(slow.waits))
+check("stop() libera o processo", mgr._process is None and mgr._running is False)
 
 # ═══════════════════════════════════════════════════════════════════
 shutil.rmtree(ROOT, ignore_errors=True)

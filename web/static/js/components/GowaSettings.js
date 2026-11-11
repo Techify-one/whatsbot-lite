@@ -39,6 +39,16 @@ export function GowaSettings({ id, autoCheck, onAutoCheckChange, onNotify }) {
   const [progress, setProgress] = useState(null);
   const [confirmUnsupported, setConfirmUnsupported] = useState(false);
   const [confirmRollback, setConfirmRollback] = useState(false);
+  // "Old processor" notice: kept apart from generic toasts so it stays visible.
+  const [cpuNotice, setCpuNotice] = useState('');
+
+  function handleFailure(res, fallback) {
+    if (res && res.error_code === 'cpu_unsupported') {
+      setCpuNotice(res.error || res.message || '');
+      return;
+    }
+    if (onNotify) onNotify((res && (res.error || res.message)) || fallback);
+  }
 
   const load = useCallback(async (force = false) => {
     setChecking(true);
@@ -66,7 +76,8 @@ export function GowaSettings({ id, autoCheck, onAutoCheckChange, onNotify }) {
         setProgress(null);
         setConfirmUnsupported(false);
         setConfirmRollback(false);
-        if (onNotify && d && d.message) onNotify(d.message);
+        if (d && d.error_code === 'cpu_unsupported') setCpuNotice(d.message || '');
+        else if (onNotify && d && d.message) onNotify(d.message);
         load(false);
       },
     });
@@ -80,11 +91,12 @@ export function GowaSettings({ id, autoCheck, onAutoCheckChange, onNotify }) {
       return;
     }
     setWorking(true);
+    setCpuNotice('');
     setProgress({ phase: 'downloading', progress: 0 });
     try {
       const res = await installGowaUpdate(info.latest_version, !info.latest_supported);
       if (!res || !res.ok) {
-        if (onNotify) onNotify((res && res.error) || 'Falha ao atualizar o GOWA.');
+        handleFailure(res, 'Falha ao atualizar o GOWA.');
         setWorking(false);
         setProgress(null);
       }
@@ -100,11 +112,12 @@ export function GowaSettings({ id, autoCheck, onAutoCheckChange, onNotify }) {
   async function handleInstallRecommended() {
     if (!info || !info.recommended_version) return;
     setWorking(true);
+    setCpuNotice('');
     setProgress({ phase: 'downloading', progress: 0 });
     try {
       const res = await installGowaUpdate(info.recommended_version, false);
       if (!res || !res.ok) {
-        if (onNotify) onNotify((res && res.error) || 'Falha ao atualizar o GOWA.');
+        handleFailure(res, 'Falha ao atualizar o GOWA.');
         setWorking(false);
         setProgress(null);
       }
@@ -270,6 +283,13 @@ export function GowaSettings({ id, autoCheck, onAutoCheckChange, onNotify }) {
                   A LLM não pôde concluir a análise; foram aplicadas somente as regras locais.
                 </span>
               ` : null}
+            </div>
+          ` : null}
+
+          ${cpuNotice && !working ? html`
+            <div id="gowa-cpu-notice" role="alert" class="mt-3 p-3 rounded-lg bg-amber-50 border border-amber-200 text-amber-800 text-xs leading-relaxed">
+              <strong class="block mb-1">Processador incompatível com esta versão do GOWA</strong>
+              ${cpuNotice}
             </div>
           ` : null}
 
