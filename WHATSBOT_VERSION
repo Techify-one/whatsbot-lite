@@ -1,6 +1,10 @@
 {
-  "version": "0.2.18",
+  "version": "0.2.19",
   "changelog": [
+    {
+      "version": "0.2.19",
+      "description": "- Linux: o bash linux_start.sh agora pergunta na primeira vez se o WhatsBot-Lite deve rodar como serviço (liga sozinho quando o servidor reinicia) ou somente no terminal\n- Linux: o serviço whatsbot-lite reinicia sozinho em caso de falha e após atualizações, e pode ser removido com bash linux_start.sh service uninstall\n- Botão Voltar do app instalado no celular funciona como em um app nativo\n- Lista de conversas atualiza ao vivo quando uma conversa é apagada, arquivada ou fixada\n- Conexão em tempo real com o painel mais estável, com reconexão automática\n- Mensagens do sistema aparecem em um cartão recolhível e mensagens duplicadas não aparecem mais"
+    },
     {
       "version": "0.2.18",
       "description": "- Corrige a atualização do GOWA para as versões 9.8 em diante, que voltava para a versão anterior\n- O GOWA agora é iniciado apenas para uso local neste computador\n- A atualização é cancelada de imediato, mantendo a versão atual, quando o GOWA novo não consegue iniciar\n- Melhorias de PWA e da experiência no celular"

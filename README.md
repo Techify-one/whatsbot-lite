@@ -233,7 +233,13 @@ PowerShell ficam embutidos na BAT e são gravados no atalho, sem arquivo adicion
 - **Conexão com internet**
 - **WhatsApp ativo no celular** — para escanear o QR Code na primeira vez
 
-### Opção 3: Docker (Windows, Mac ou Linux)
+### Opção 3: Linux (direto, também em servidor)
+- **Linux** com `python3`, `curl` e `unzip` — no terminal, dentro da pasta, rode `bash linux_start.sh`
+- Na primeira vez ele pergunta: **[1] Serviço** (liga sozinho quando o servidor reinicia, em segundo plano, pede a senha do sudo) ou **[2] Somente terminal** (roda só enquanto o terminal estiver aberto)
+- No modo serviço: `bash linux_start.sh service status` mostra o estado, `bash linux_start.sh service logs` os registros e `bash linux_start.sh service uninstall` volta ao modo terminal
+- **WhatsApp ativo no celular** — para escanear o QR Code na primeira vez
+
+### Opção 4: Docker (Windows, Mac ou Linux)
 - **Docker** instalado ([docker.com](https://www.docker.com/get-started))
 - **Conexão com internet**
 - **WhatsApp ativo no celular** — para escanear o QR Code na primeira vez
@@ -270,7 +276,7 @@ Sim. Como tudo roda no seu computador, o programa precisa estar aberto para a IA
 O programa tenta reconectar automaticamente. Quando a internet voltar, ele retoma o funcionamento normalmente.
 
 **Posso usar no Mac ou Linux?**
-Sim! No **Mac**, além do Docker, há um atalho nativo: dê dois cliques em **start.command** (sem precisar de Docker). No **Windows**, use o **start.bat**. E em qualquer sistema (Windows, Mac ou Linux) você pode rodar via **Docker**.
+Sim! No **Mac**, além do Docker, há um atalho nativo: dê dois cliques em **start.command** (sem precisar de Docker). No **Linux**, rode `bash linux_start.sh` (pode virar serviço que liga sozinho com o servidor). No **Windows**, use o **start.bat**. E em qualquer sistema (Windows, Mac ou Linux) você pode rodar via **Docker**.
 
 **Quero personalizar algo no programa, como faço?**
 O WhatsBot-Lite é de código aberto e roda direto do código (sem precisar compilar). Você pode pedir para qualquer ferramenta de IA (como ChatGPT, Claude Code, Cursor, Cowork, etc.) fazer alterações — é só salvar o arquivo, fechar e abrir o iniciar.bat de novo. As mudanças já funcionam. Não precisa saber programar.

@@ -39,6 +39,165 @@ WHATSBOT_RELOAD="${WHATSBOT_RELOAD:-1}"
 
 cd "$(dirname "$0")"
 
+# ===== Serviço systemd (1 instância por servidor; Docker/Coolify não usa isto) =====
+#   ./linux_start.sh service install     cria /etc/systemd/system/whatsbot-lite.service, liga no boot e inicia
+#   ./linux_start.sh service uninstall   para e remove (dados em storages/ ficam intactos)
+#   ./linux_start.sh service status|logs|print   (print só imprime a unit, sem sudo)
+# Portas: WHATSBOT_WEB_PORT=8080 ./linux_start.sh service install
+if [ "${1:-}" = "service" ]; then
+    set -e
+    SERVICE="whatsbot-lite"
+    UNIT="/etc/systemd/system/${SERVICE}.service"
+    DIR="$(pwd)"
+    # Roda como o DONO da pasta: self-update, pip e storages/ escrevem ali. Root deixaria
+    # arquivos que o ./linux_start.sh manual não consegue mais alterar.
+    OWNER="$(stat -c %U "$DIR")"
+
+    unit_text() {
+        cat <<EOF
+[Unit]
+Description=WhatsBot-Lite
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=${OWNER}
+WorkingDirectory=${DIR}
+# SERVICE=1: este script faz exec do uvicorn (sem loop), o Restart= refaz o script inteiro.
+# RELOAD=0: com --reload o os._exit de plugin/update mata só o worker e o serviço fica "ativo" morto.
+Environment=WHATSBOT_SERVICE=1
+Environment=WHATSBOT_RELOAD=0
+Environment=WHATSBOT_WEB_PORT=${WHATSBOT_WEB_PORT}
+Environment=WHATSBOT_GOWA_PORT=${WHATSBOT_GOWA_PORT}
+ExecStart=/bin/bash "${DIR}/linux_start.sh"
+Restart=always
+RestartSec=5
+
+[Install]
+WantedBy=multi-user.target
+EOF
+    }
+
+    as_root() {
+        [ "$(id -u)" -eq 0 ] && return 0
+        # ``sudo env`` repassa as portas escolhidas (o sudo limpa o ambiente).
+        exec sudo env "WHATSBOT_WEB_PORT=$WHATSBOT_WEB_PORT" "WHATSBOT_GOWA_PORT=$WHATSBOT_GOWA_PORT" /bin/bash "$DIR/linux_start.sh" "$@"
+    }
+
+    # O start mata QUALQUER processo na porta (free_port): outra instância nela seria derrubada.
+    port_busy() { ss -ltnH "sport = :$1" 2>/dev/null | grep -q .; }
+
+    # O nome ``whatsbot-lite`` é fixo. Se já existe uma unit de OUTRA pasta (ex.: outra cópia do repo na
+    # mesma máquina), instalar/remover aqui a sobrescreveria ou apagaria. Só mexe na que é desta pasta.
+    foreign_unit() {
+        [ -f "$UNIT" ] || return 1
+        [ "$(systemctl show -p WorkingDirectory --value "$SERVICE" 2>/dev/null)" != "$DIR" ]
+    }
+
+    case "${2:-}" in
+        print)
+            unit_text
+            ;;
+        install)
+            as_root "$@"
+            if [ "$OWNER" = "root" ]; then
+                echo "[service] ERRO: a pasta $DIR pertence ao root. Rode como o dono (chown -R usuario:usuario) e tente de novo." >&2
+                exit 1
+            fi
+            if foreign_unit; then
+                echo "[service] ERRO: já existe o serviço '$SERVICE' apontando para outra pasta ($(systemctl show -p WorkingDirectory --value "$SERVICE"))." >&2
+                echo "          Instalar aqui o sobrescreveria. Um serviço por máquina: remova o outro antes, ou rode esta cópia só no terminal (opção 2)." >&2
+                exit 1
+            fi
+            if ! systemctl is-active --quiet "$SERVICE"; then
+                for p in "$WHATSBOT_WEB_PORT" "$WHATSBOT_GOWA_PORT"; do
+                    if port_busy "$p"; then
+                        echo "[service] ERRO: a porta $p já está em uso (o start do WhatsBot-Lite derrubaria esse processo)." >&2
+                        echo "          Escolha outra: WHATSBOT_WEB_PORT=8080 WHATSBOT_GOWA_PORT=64999 ./linux_start.sh service install" >&2
+                        exit 1
+                    fi
+                done
+            fi
+            unit_text > "$UNIT"
+            systemctl daemon-reload
+            systemctl enable "$SERVICE"
+            systemctl restart "$SERVICE"
+            echo "[service] instalado como '$OWNER'. Painel: http://localhost:${WHATSBOT_WEB_PORT}"
+            echo "          Na 1ª subida ele cria a venv e baixa dependências/GOWA: pode levar alguns minutos."
+            echo "          logs: bash linux_start.sh service logs   |   status: bash linux_start.sh service status"
+            ;;
+        uninstall)
+            as_root "$@"
+            if foreign_unit; then
+                echo "[service] ERRO: o serviço '$SERVICE' pertence a outra pasta ($(systemctl show -p WorkingDirectory --value "$SERVICE")); não removo daqui." >&2
+                exit 1
+            fi
+            systemctl disable --now "$SERVICE" 2>/dev/null || true
+            rm -f "$UNIT" "$DIR/storages/linux_service_choice.txt"
+            systemctl daemon-reload
+            echo "[service] removido. Os dados em $DIR/storages não foram tocados; a pergunta 'serviço ou terminal' volta no próximo bash linux_start.sh."
+            ;;
+        status)
+            systemctl status "$SERVICE" --no-pager || true
+            ;;
+        logs)
+            as_root "$@"
+            exec journalctl -u "$SERVICE" -n 100 -f
+            ;;
+        *)
+            echo "uso: ./linux_start.sh service install|uninstall|status|logs|print" >&2
+            exit 1
+            ;;
+    esac
+    exit 0
+fi
+
+# ===== 1ª execução: serviço ou só terminal (equivalente ao windows_start.bat) =====
+# Só a escolha "somente terminal" é gravada em storages/linux_service_choice.txt (como o
+# windows_autostart_choice.txt); "serviço" é lembrado pelo próprio systemd. O uninstall apaga o arquivo.
+# NUNCA roda dentro do próprio serviço (WHATSBOT_SERVICE=1): ele cairia no ``exit 0`` abaixo e o
+# Restart=always giraria em loop. Também só pergunta com terminal interativo (-t 0).
+CHOICE_FILE="storages/linux_service_choice.txt"
+if [ "${WHATSBOT_SERVICE:-0}" != "1" ]; then
+    choice="$(cat "$CHOICE_FILE" 2>/dev/null || true)"
+    # Já é serviço DESTA pasta: subir à mão brigaria pela porta (o free_port abaixo mataria o serviço).
+    # Não depende do arquivo de escolha: cobre também quem rodou ``service install`` direto.
+    if systemctl is-enabled --quiet whatsbot-lite 2>/dev/null \
+        && [ "$(systemctl show -p WorkingDirectory --value whatsbot-lite 2>/dev/null)" = "$(pwd)" ]; then
+        echo "[linux_start] O WhatsBot-Lite já está instalado como serviço (roda sozinho no boot)."
+        echo "              logs: bash linux_start.sh service logs   |   status: bash linux_start.sh service status"
+        echo "              iniciar/parar/reiniciar: sudo systemctl start|stop|restart whatsbot-lite"
+        echo "              voltar ao modo terminal: bash linux_start.sh service uninstall (a pergunta volta na próxima vez)"
+        exit 0
+    fi
+    if [ "$choice" != "disabled" ] && [ -t 0 ] && [ -d /run/systemd/system ]; then
+        echo
+        echo "========================================"
+        echo "  Como rodar o WhatsBot-Lite?"
+        echo "========================================"
+        echo
+        echo "[1] Serviço - inicia sozinho quando o servidor liga, em segundo plano (pede sudo)"
+        echo "[2] Somente terminal - roda só enquanto este terminal estiver aberto"
+        echo
+        ans=""
+        while [ "$ans" != "1" ] && [ "$ans" != "2" ]; do
+            read -r -p "Escolha uma opção [1/2]: " ans || exit 1
+        done
+        mkdir -p storages
+        if [ "$ans" = "2" ]; then
+            echo disabled > "$CHOICE_FILE"
+            echo "[linux_start] OK: o WhatsBot-Lite vai rodar somente neste terminal."
+        elif bash "$(pwd)/linux_start.sh" service install; then
+            exit 0
+        else
+            # Não segue para o modo terminal: o free_port abaixo mataria quem ocupa a porta (motivo da recusa).
+            echo "[linux_start] Serviço NÃO instalado. Resolva o erro acima e rode de novo (a pergunta volta)." >&2
+            exit 1
+        fi
+    fi
+fi
+
 # Versão do GOWA. Fonte única: o arquivo GOWA_VERSION na raiz do repo, o mesmo
 # lido pelo Dockerfile e por gowa/binary.py. Override por env se precisar.
 GOWA_VERSION="${GOWA_VERSION:-$(cat ./GOWA_VERSION 2>/dev/null || echo 9.6.0)}"
@@ -141,6 +300,16 @@ else
         --reload-dir plugins
         --reload-dir storages/plugins
     )
+fi
+
+# Modo serviço (systemd, ver linux_service.sh): sem o loop. O ``exec`` faz o
+# uvicorn virar o processo principal da unit; quando ele sai (crash, ou o
+# ``os._exit`` do restart de plugin/self-update) o ``Restart=always`` refaz ESTE
+# script inteiro. Assim o pip e o GOWA são reconferidos a cada subida; o loop
+# abaixo pularia isso e subiria com as dependências antigas após um update.
+if [ "${WHATSBOT_SERVICE:-0}" = "1" ]; then
+    echo "[linux_start] $(date '+%H:%M:%S') starting uvicorn $mode_label (port $WHATSBOT_WEB_PORT) como serviço..."
+    exec ./venv/bin/python -m uvicorn server.dev:app "${uvicorn_args[@]}"
 fi
 
 while true; do

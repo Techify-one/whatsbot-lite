@@ -118,6 +118,7 @@ Escolha o launcher pelo ambiente onde está rodando:
 | Linux dev nativo | `./linux_start.sh` | Python local + uvicorn `--reload` | Sim (core + plugins) | Dia-a-dia de desenvolvimento — edita `.py` e o worker reinicia sozinho |
 | macOS dev nativo | `macos_start.command` | Python local + uvicorn `--reload` | Sim (core + plugins) | Dia-a-dia em macOS; baixa Python e o binário GOWA automaticamente na 1ª execução |
 | Windows dev nativo | `windows_start.bat` | Python local + uvicorn `--reload` | Sim (core + plugins) | Dia-a-dia em Windows; baixa Python automaticamente na 1ª execução |
+| Linux servidor (1 instância) | `bash linux_start.sh` → opção **1** | Serviço systemd `whatsbot-lite` rodando `linux_start.sh` | Não | Sobe no boot e reinicia sozinho, sem depender de terminal. A 1ª execução pergunta "serviço ou só terminal". Ver [Linux como serviço](#linux-como-serviço-systemd) |
 | Linux/macOS prod-like | `./docker_start.sh` | `docker compose up --build -d` | Não | Validar o build Docker localmente antes de push pro Coolify |
 | Coolify / servidor remoto | `git push` → deploy automático | Container do [Dockerfile](Dockerfile), `CMD python main.py` | Não | Produção — Coolify clona o repo e roda o Dockerfile |
 
@@ -126,6 +127,7 @@ Parar o servidor:
 - macOS dev: `Ctrl+C` na janela do `macos_start.command` (ou rode `macos_stop.command`)
 - Windows dev: `windows_stop.bat`
 - Docker local: `docker compose down`
+- Linux serviço: `sudo systemctl stop whatsbot-lite` (remover de vez: `bash linux_start.sh service uninstall`)
 
 Setup inicial (1ª vez no Linux):
 
@@ -136,6 +138,39 @@ python3 -m venv venv
 ```
 
 O `windows_start.bat` e o `macos_start.command` fazem o setup sozinhos (baixam Python 3.12, criam a venv, instalam as deps; o de macOS também baixa o binário GOWA).
+
+### Linux como serviço (systemd)
+
+Para servidor Linux nativo (sem Docker). Não há comando extra: na 1ª `bash linux_start.sh` ele pergunta
+`[1] Serviço` ou `[2] Somente terminal` (mesmo desenho do `windows_start.bat`). A opção 1 cria
+`/etc/systemd/system/whatsbot-lite.service`, liga no boot, inicia e **encerra o launcher** (o serviço assume); pede `sudo`
+sozinho. Não afeta Docker/Coolify: o Dockerfile só copia pastas e o `main.py`, nunca estes scripts.
+
+- **Quando pergunta**: só com terminal interativo (`-t 0`), com systemd (`/run/systemd/system`) e fora do próprio
+  serviço (`WHATSBOT_SERVICE=1`, senão o `Restart=always` giraria em loop). Opção **2** grava `disabled` em
+  `storages/linux_service_choice.txt` e não pergunta mais (análogo ao `windows_autostart_choice.txt`); **serviço** não
+  grava arquivo, quem lembra é o systemd. Instalação falha → o launcher sai com erro, **sem** seguir em modo terminal
+  (o `free_port` mataria quem ocupa a porta); a pergunta volta.
+- **Já instalado**: rodar `bash linux_start.sh` de novo só avisa e sai (subir à mão brigaria pela porta com o serviço).
+  Detecta pelo `WorkingDirectory` do serviço = esta pasta.
+- **Comandos avançados** (opcionais): `bash linux_start.sh service install|uninstall|status|logs|print`. `uninstall`
+  apaga o arquivo de escolha, então a pergunta volta. `print` só imprime a unit, sem sudo.
+
+- **Serviço de sistema, não de usuário**: sobe no boot sem `enable-linger`, enxerga o `network-online.target` (o
+  `linux_start.sh` baixa o GOWA e roda `pip` ao iniciar) e `systemctl`/`journalctl` funcionam sem `--user`.
+- **Roda como o DONO da pasta** (`stat -c %U`), nunca como root: o self-update, o `pip` e o `storages/` escrevem ali.
+  O script **recusa instalar** se a pasta for do root. Sem hardening (`ProtectSystem` etc.) de propósito, ele quebraria o
+  self-update.
+- **`WHATSBOT_SERVICE=1`**: o `linux_start.sh` faz `exec uvicorn` em vez do loop `while true`. Quando o processo sai
+  (crash, restart de plugin, self-update) o `Restart=always` refaz o script **inteiro** e o `pip`/GOWA são
+  reconferidos. O loop subiria com as dependências antigas.
+- **`WHATSBOT_RELOAD=0` é fixo na unit**: com `--reload` o `os._exit` do `schedule_restart` mata só o worker e o
+  serviço fica `active` com o app morto (ver o comentário no `linux_start.sh`).
+- **Portas**: padrão 8090 (web) e 64998 (GOWA), as mesmas do `linux_start.sh`; troque com
+  `WHATSBOT_WEB_PORT=8080 bash linux_start.sh` (a opção 1 herda a variável). O `install` **recusa** porta já em uso
+  porque o `free_port` do `linux_start.sh` mata quem estiver nela a cada start.
+- **Um serviço por máquina**: o nome `whatsbot-lite` é fixo. Se já existe um `whatsbot-lite.service` apontando para OUTRA pasta
+  (outra cópia do repo), `install` e `uninstall` **recusam** em vez de sobrescrever/apagar; use a opção 2 (terminal).
 
 ## Banco de dados
 
