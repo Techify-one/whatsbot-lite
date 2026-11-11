@@ -1,6 +1,10 @@
 {
-  "version": "0.2.20",
+  "version": "0.2.21",
   "changelog": [
+    {
+      "version": "0.2.21",
+      "description": "- Quando o processador é antigo demais para a nova versão do GOWA, o painel passa a lembrar disso e deixa de oferecer atualizações que não vão funcionar\n- Botão para instalar a última versão do GOWA compatível com o seu processador (9.7.0)\n- Botão \"Testar de novo\" para quem trocou de computador\n- WhatsBot Cloud: quando a versão compatível do GOWA ainda está sendo preparada, o painel avisa para voltar em cerca de 30 minutos, sem tratar como erro"
+    },
     {
       "version": "0.2.20",
       "description": "- Atualização do GOWA para as versões 9.8 em diante em processadores antigos (sem AVX2) na hospedagem WhatsBot Cloud\n- Aviso claro quando o processador é antigo demais para a nova versão do GOWA; a versão atual continua funcionando\n- Correção: a atualização do GOWA podia falhar com \"Erro inesperado\" quando o servidor estava lento"
