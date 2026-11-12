@@ -128,6 +128,67 @@ def tmp_dir(create: bool = False) -> Path:
     return path
 
 
+# musl loader that runs the GOWA binary taken from the official Docker image
+# (``flavor: ghcr``, see ``gowa/updater.py:fetch_ghcr_binary``). It lives next to
+# the managed binary, is the same file for every GOWA version and is never part
+# of the ``.bak`` rollback copy.
+LOADER_NAME = "ld-musl-x86_64.so.1"
+_MUSL_INTERPRETER = "/lib/" + LOADER_NAME
+
+
+def loader_path() -> Path:
+    return managed_dir() / LOADER_NAME
+
+
+def elf_interpreter(path: Path) -> str:
+    """``PT_INTERP`` of a 64-bit little-endian ELF, or ``''`` (not ELF / static / unreadable)."""
+    import struct
+
+    try:
+        with Path(path).open("rb") as fh:
+            header = fh.read(64)
+            if len(header) < 64 or header[:4] != b"\x7fELF" or header[4] != 2 or header[5] != 1:
+                return ""
+            phoff = struct.unpack_from("<Q", header, 0x20)[0]
+            phentsize, phnum = struct.unpack_from("<HH", header, 0x36)
+            if phentsize < 56 or phnum > 512:
+                return ""
+            fh.seek(phoff)
+            table = fh.read(phentsize * phnum)
+            for i in range(phnum):
+                base = i * phentsize
+                if len(table) < base + 40:
+                    return ""
+                if struct.unpack_from("<I", table, base)[0] != 3:  # PT_INTERP
+                    continue
+                offset = struct.unpack_from("<Q", table, base + 8)[0]
+                size = struct.unpack_from("<Q", table, base + 32)[0]
+                if size > 256:
+                    return ""
+                fh.seek(offset)
+                return fh.read(size).rstrip(b"\0").decode("ascii", errors="replace")
+    except OSError:
+        return ""
+    return ""
+
+
+def launch_prefix(binary: Path) -> list[str]:
+    """What goes in front of ``binary`` on the command line: ``[]`` or ``[loader]``.
+
+    The single rule for "does this GOWA need our musl loader": the binary asks
+    for the musl interpreter and the loader is in ``storages/bin``. Decided by
+    the file itself, not by ``gowa_meta.json``, so a ``.bak`` restored by the
+    rollback (whose meta no longer says ``ghcr``) still starts correctly. The
+    official zip and the old ``compat`` build are glibc binaries: no prefix.
+    """
+    if sys.platform != "linux":
+        return []
+    loader = loader_path()
+    if loader.is_file() and elf_interpreter(binary) == _MUSL_INTERPRETER:
+        return [str(loader)]
+    return []
+
+
 def session_backup_dir(version: str, create: bool = False) -> Path:
     path = managed_dir() / "session_backup" / version
     if create:

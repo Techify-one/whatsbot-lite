@@ -34,8 +34,6 @@ export function GowaUpdateModal({
   cpuNotice = '',
   cpuFallback = '',
   onInstallFallback,
-  // Hosting only: the compat build is still being compiled ("come back in 30 min").
-  pendingNotice = '',
   onUpdateNow,
   onLater,
   onSkip,
@@ -165,13 +163,6 @@ export function GowaUpdateModal({
                 </button>
               </div>
             ` : null}
-          </div>
-        ` : null}
-
-        ${pendingNotice && !installing && !cpuNotice ? html`
-          <div role="status" class="mb-4 p-3 rounded-lg bg-blue-50 border border-blue-200 text-blue-900 text-xs leading-relaxed">
-            <strong class="block mb-1">Atualização em preparação</strong>
-            ${pendingNotice}
           </div>
         ` : null}
 

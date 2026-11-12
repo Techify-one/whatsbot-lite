@@ -23,6 +23,14 @@ def _get_gowa_binary() -> Path:
     return gowa_binary.resolve_binary()[0]
 
 
+def _file_key(path: Path) -> tuple[str, int, int]:
+    try:
+        st = path.stat()
+        return (str(path), st.st_size, st.st_mtime_ns)
+    except OSError:
+        return (str(path), -1, -1)
+
+
 def _gowa_log_path() -> Path:
     """Return path to the GOWA debug log file (created lazily)."""
     base = Path(__file__).resolve().parent.parent
@@ -71,6 +79,9 @@ class GOWAManager:
         # thread while the watchdog may be trying to respawn it. Reentrant
         # because restart() calls stop() and start().
         self._lifecycle_lock = threading.RLock()
+        # Binaries (path, size, mtime) already proven to run on this CPU, so
+        # watchdog restarts do not repeat the check (or the download).
+        self._cpu_checked: set[tuple[str, int, int]] = set()
 
     @property
     def is_running(self) -> bool:
@@ -98,6 +109,7 @@ class GOWAManager:
                 f"{gowa_binary.bundled_binary_path()} (shipped with the app) or at "
                 f"{gowa_binary.managed_binary_path()} (installed from the panel)."
             )
+        binary = self._ensure_runs_here(binary)
 
         # A fresh start clears the crash budget. Without this, an update that
         # follows a few crashes inherits the old count and the watchdog gives
@@ -105,7 +117,10 @@ class GOWAManager:
         self._restart_count = 0
         self._restart_window_start = 0.0
 
-        cmd = [
+        # GOWA taken from the official Docker image (flavor "ghcr") is a musl
+        # binary started through the loader stored next to it; everything else
+        # runs directly. The rule lives in gowa/binary.py:launch_prefix.
+        cmd = gowa_binary.launch_prefix(binary) + [
             str(binary),
             "rest",
             "--port", str(self.port),
@@ -197,6 +212,26 @@ class GOWAManager:
             target=self._watchdog, daemon=True, name="gowa-watchdog"
         )
         self._watchdog_thread.start()
+
+    def _ensure_runs_here(self, binary: Path) -> Path:
+        """Fix, before starting, a GOWA this CPU cannot run (Linux amd64 without AVX2).
+
+        Covers the image / ``linux_start.sh`` shipping an official 9.8+ binary
+        on an old CPU: the updater installs the GHCR build of the same version
+        into ``storages/bin`` once, and every later start resolves to it. Runs
+        once per binary file; raises ``GowaCpuIsaError`` (nothing started, so
+        the watchdog cannot loop) when it cannot be fixed.
+        """
+        key = _file_key(binary)
+        if key in self._cpu_checked:
+            return binary
+        from gowa import updater as gowa_updater  # local: updater is heavier and optional here
+
+        if gowa_updater.repair_at_boot(binary):
+            binary = _get_gowa_binary()
+            key = _file_key(binary)
+        self._cpu_checked.add(key)
+        return binary
 
     def stop(self):
         """Stop the GOWA process gracefully."""

@@ -1247,18 +1247,18 @@ check("GET /gowa/update/check -> cpu_unsupported e nenhuma atualização ofereci
 settings["gowa_cpu_unsupported"] = ""
 _gowa_updater.install = lambda version, **_k: {
     "ok": False, "version": version, "previous_version": "", "rolled_back": False,
-    "message": _gowa_updater.COMPAT_PENDING_MESSAGE, "error_code": _gowa_updater.COMPAT_PENDING_CODE,
+    "message": _gowa_updater._GENERIC_UPDATE_FAILURE, "error_code": "",
 }
 try:
     r = client.post("/api/gowa/update", json={"version": "9.9.0"})
 finally:
     _gowa_updater.install = _orig_install
-check("compat ainda não compilado -> 400 com error_code=compat_pending",
-      r.status_code == 400 and r.json().get("error_code") == "compat_pending", str(r.json()))
-check("compat ainda não compilado -> mensagem 'retorne daqui a 30 minutos'",
-      "30 minutos" in r.json().get("error", ""), str(r.json()))
-check("compat ainda não compilado -> NÃO marca a CPU como antiga",
+check("falha genérica -> 400 sem error_code",
+      r.status_code == 400 and not r.json().get("error_code"), str(r.json()))
+check("falha genérica -> NÃO marca a CPU como antiga",
       not settings.get("gowa_cpu_unsupported"))
+check("o código 'compat_pending' (pasta compat) não existe mais",
+      not hasattr(_gowa_updater, "COMPAT_PENDING_CODE"))
 
 # "Testar de novo" clears the mark.
 settings["gowa_cpu_unsupported"] = "9.9.0"

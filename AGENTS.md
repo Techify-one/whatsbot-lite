@@ -431,11 +431,11 @@ a tabela e o `.version` divergirem. Bumpar `GOWA_VERSION` **sem** trocar o exe �
 versão recomendada baixa o binário (o exe novo no repositório é recomendado, não obrigatório). Os
 launchers de Linux/macOS e o Dockerfile continuam baixando o que o `GOWA_VERSION` pede e gravando o stamp.
 
-### CPU incompatível e o build "compat" (só na hospedagem)
+### CPU incompatível e o plano B do GHCR (qualquer Linux amd64)
 
-Os binários Linux oficiais do GOWA a partir da **9.8.0** são marcados como `x86-64-v3` (exigem AVX2) e
-não abrem em CPUs antigas (ex.: o Xeon E5-2660 da hospedagem). O `_smoke_test` reconhece CPU
-incompatível nos três sistemas e levanta `GowaCpuIsaError`:
+Os binários Linux oficiais do GOWA a partir da **9.8.0** (zip das releases) são marcados como `x86-64-v3`
+(exigem AVX2) e não abrem em CPUs antigas (ex.: o Xeon E5-2660 da hospedagem). O `_smoke_test` reconhece
+CPU incompatível nos três sistemas e levanta `GowaCpuIsaError`:
 
 | Sinal | Sistema |
 |---|---|
@@ -445,21 +445,47 @@ incompatível nos três sistemas e levanta `GowaCpuIsaError`:
 
 O mesmo erro sai quando o GOWA novo **sobe e morre** por instrução ilegal (rollback + aviso).
 
-- **Plano B (compat):** só quando `WHATSBOT_GOWA_COMPAT_URL` está definida **e** a plataforma é
-  `linux/amd64`. Busca `whatsapp_<v>_linux_amd64_compat.zip` nessa base, exige o sha256 no
-  `checksums.txt` **da mesma base** (sem checksum = recusa), roda o `--help` de novo e segue o fluxo
-  normal. `gowa_meta.json` grava `"flavor": "compat"` (ou `"official"`).
-- **Sem endereço padrão.** Sem a env, o plano B não existe. Só a hospedagem a define, como
-  `file:///opt/gowa-compat` (pasta do host montada **somente leitura**). `compat_base_url()` aceita só
-  `file://` e `https://`; a URL final é montada no servidor a partir da versão validada pela regex.
-- **Sem plano B** (Windows, Mac, Coolify, Linux próprio): a versão atual é mantida e a resposta traz
-  `error_code: "cpu_unsupported"` + `CPU_UNSUPPORTED_MESSAGE`.
+- **Plano B (GHCR), só em `linux/amd64`, sem nada para configurar.** A imagem Docker oficial do GOWA
+  (`ghcr.io/aldinokemal/go-whatsapp-web-multidevice:v<versão>`) é compilada pelo autor em Alpine (musl) e
+  **não** exige AVX2. `fetch_ghcr_binary()` (só stdlib) pega token anônimo, o índice, o manifesto
+  `linux/amd64` (o índice também lista entradas `unknown/unknown` de atestação) e baixa as camadas **da menor
+  para a maior** até achar `app/whatsapp` e `lib/ld-musl-x86_64.so.1` (~17 MB; a camada do ffmpeg, ~57 MB,
+  fica de fora). **Procure por conteúdo, nunca por índice:** a posição das camadas muda entre versões.
+- **Integridade:** o sha256 de cada camada tem de ser o digest dela no manifesto (senão: mensagem de
+  checksum, nada trocado). Do tar só saem os dois membros, por nome exato e como arquivo regular (link =
+  recusa); nunca `extractall`. Limite de 200 MB por camada. A URL é montada da versão validada pela regex.
+- **Token só para o ghcr.io:** os blobs respondem 307 para `pkg-containers.githubusercontent.com`, e o urllib
+  **reenvia** um `Authorization` passado em `headers=` para o host do redirect. Por isso
+  `add_unredirected_header` (testado; não troque).
+- **Carregador musl:** o binário pede `/lib/ld-musl-x86_64.so.1`, que não existe no Debian/Ubuntu. Ele
+  roda como `storages/bin/ld-musl-x86_64.so.1 storages/bin/gowa rest ...`. O carregador fica fixo em
+  `storages/bin` (é o mesmo arquivo em todas as versões) e **não** entra no `.bak`. A regra de "precisa do
+  carregador" é **uma só**, `gowa/binary.py:launch_prefix`: o binário pede o interpretador musl
+  (`elf_interpreter`, lido do ELF) **e** o carregador está lá. Decidido pelo arquivo, não pelo meta, para o
+  `.bak` restaurado pelo rollback continuar abrindo. `pkill -f bin/gowa` continua casando (o caminho está no
+  argv); o `comm` do processo passa a ser `ld-musl-x86_64.`.
+- Tudo é testado e extraído em `storages/bin/.tmp`, nunca em `/tmp` (é `noexec` na hospedagem).
+  `gowa_meta.json` grava `"flavor": "ghcr"` (ou `"official"`), `asset` = a imagem de origem e
+  `checksum: verified`.
+- **Correção no boot** (`gowa_updater.repair_at_boot`, chamada por `GOWAManager._ensure_runs_here` antes de
+  iniciar): se o binário que vai subir falha no teste por CPU, instala o GHCR **da mesma versão** em
+  `storages/bin` com a mesma troca do botão (`_swap_in`) e inicia por ele. Cobre a imagem Docker e o
+  `linux_start.sh` com um `GOWA_VERSION` 9.8+. Uma vez por arquivo de binário (o watchdog não repete; um
+  restart do WhatsBot só repete o teste de 1 a 2 s, de propósito, para detectar troca de máquina). Não roda
+  com o `_UPDATE_LOCK` ocupado nem com `WHATSBOT_GOWA_BINARY`. Versão desconhecida, sem rede, 404/429 ou
+  imagem mudada → `GowaCpuIsaError`: nada é iniciado (sem loop de restart) e o `start_gowa_task` grava a
+  marca `gowa_cpu_unsupported` e mostra o aviso.
+- **`WHATSBOT_GOWA_REGISTRY`**: override do registry (só `http(s)`), para os testes offline e um espelho
+  futuro. **Não é exigido de ninguém.**
+- **Sem plano B** (Windows, Mac, Linux arm64, ou o GHCR falhou): a versão atual é mantida e a resposta traz
+  `error_code: "cpu_unsupported"` + `CPU_UNSUPPORTED_MESSAGE`. O GHCR nunca é consultado fora do
+  `linux/amd64` nem quando o oficial abre.
 - **CPU antiga constatada = marca no banco** (`gowa_cpu_unsupported`, guarda a versão que falhou). Quem grava é
-  a rota `POST /api/gowa/update` (`mark_cpu_unsupported`), só no erro `cpu_unsupported`. Com a marca:
-  `check()` devolve logo, **sem GitHub e sem LLM**; `recommended_info()` deixa de recomendar;
-  `compatPrompt`/`recommendedPrompt` (frontend) não abrem modal; o card some com "Verificar", "Última",
-  "Atualizar para" e mostra um aviso **fixo** (`#gowa-cpu-notice`) com o texto "…Se precisar de ajuda entre em
-  contato com a equipe Techify." O banco guarda a marca, então ela sobrevive a recarregar a página.
+  a rota `POST /api/gowa/update` (`mark_cpu_unsupported`), só no erro `cpu_unsupported`, e o boot quando nem o
+  GHCR resolveu. Com a marca: `check()` devolve logo, **sem GitHub e sem LLM**; `recommended_info()` deixa de
+  recomendar; `compatPrompt`/`recommendedPrompt` (frontend) não abrem modal; o card some com "Verificar",
+  "Última", "Atualizar para" e mostra um aviso **fixo** (`#gowa-cpu-notice`) com o texto "…Se precisar de ajuda
+  entre em contato com a equipe Techify." O banco guarda a marca, então ela sobrevive a recarregar a página.
 - **Botão da última versão compatível.** `LAST_CPU_COMPATIBLE_VERSION = "9.7.0"` (a última oficial sem AVX2:
   a 9.8.0 passou a exigir `x86-64-v3`). `cpu_unsupported_info()` devolve `cpu_fallback_version` só quando a
   instalada é **menor** que ela (nunca faz downgrade, nunca com versão desconhecida ou binário fixado por env).
@@ -467,16 +493,13 @@ O mesmo erro sai quando o GOWA novo **sobe e morre** por instrução ilegal (rol
   confira com `readelf -n` que o oficial novo ainda diz `x86-64-baseline`.**
 - **"Testar de novo"** (`POST /api/gowa/cpu-retry`) limpa a marca, para quem trocou de computador. Se a CPU
   ainda for antiga, a próxima tentativa falha no smoke test e marca de novo.
-- **Compat ainda não compilado (só hospedagem).** Se o zip `_compat.zip` não existe na pasta (404 / arquivo
-  inexistente) **ou** existe mas o `checksums.txt` ainda não tem a linha dele (o build grava o checksum por
-  último), a resposta traz `error_code: "compat_pending"` + `COMPAT_PENDING_MESSAGE` ("…retorne daqui a 30
-  minutos…"). **Não** marca a CPU como antiga e **não** conta como falha. Checksum que não confere continua
-  sendo recusa com a mensagem de integridade; outras falhas do compat mantêm a mensagem genérica.
-- **O compat é o código oficial da tag**, compilado no servidor com
-  `CGO_ENABLED=1 GOAMD64=v1 CGO_CFLAGS="-O2 -march=x86-64 -mtune=generic"` (script
-  `gowa-compat-build.sh` do `whatsbot-infra`). O hash dele **não** entra em `KNOWN_BINARY_HASHES`.
-- **Não bumpar `GOWA_VERSION` para 9.8+** antes de o Dockerfile e o `linux_start.sh` terem o mesmo
-  plano B: eles baixam o oficial a partir dela, e a imagem da hospedagem nasceria com um GOWA que não abre.
+- **Instalações antigas com `"flavor": "compat"`** (binário glibc compilado na hospedagem até a v0.2.21)
+  continuam iniciando direto, sem carregador. Não apague nem migre: a próxima atualização do GOWA troca.
+  O compat compilado, a pasta `/srv/gowa-compat`, `WHATSBOT_GOWA_COMPAT_URL` e o `compat_pending` saíram.
+- **Risco conhecido:** é um efeito de como o autor monta a imagem, não uma garantia. Se um dia ele deixar o
+  Alpine ou passar a exigir AVX2 lá também, o teste recusa e aparece o aviso; nada quebra.
+- **`GOWA_VERSION` ≥ 9.8** só depois desta release estar nos clientes da hospedagem e testada com WhatsApp
+  real numa CPU sem AVX2: a correção no boot é o que faz a imagem Docker e o `linux_start.sh` funcionarem lá.
 - `manager.stop()` espera `GOWA_STOP_TIMEOUT_SEC` (10 s) após o SIGTERM, porque com sessão ativa o GOWA
   leva ~6,5 s para sair. Um `TimeoutExpired` depois do SIGKILL é só registrado: antes ele vazava e
   derrubava a atualização com "Erro inesperado".
@@ -1172,7 +1195,7 @@ Testes de endpoint em `tests/test_endpoints.py` — cobrem todos os endpoints da
 # Rodar testes (não precisa de servidor rodando)
 source venv/Scripts/activate
 python tests/test_endpoints.py
-python tests/test_gowa_update.py   # updater do GOWA (offline, release falsa via file://)
+python tests/test_gowa_update.py   # updater do GOWA (offline: release falsa via file:// + registry GHCR falso em http.server)
 python tests/test_gowa_proxy.py    # proxy do GOWA (offline, proxies SOCKS5/HTTP falsos em socket)
 node --test tests/gowa-prompt.test.cjs  # decisão dos modais de GOWA no frontend (sem navegador)
 python tests/test_provisioning_target.py  # par destino+frase do provisionamento + os dois seams (offline)

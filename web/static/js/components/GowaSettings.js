@@ -40,19 +40,12 @@ export function GowaSettings({ id, autoCheck, onAutoCheckChange, onNotify }) {
   const [progress, setProgress] = useState(null);
   const [confirmUnsupported, setConfirmUnsupported] = useState(false);
   const [confirmRollback, setConfirmRollback] = useState(false);
-  // Hosting only: the compat build is still being compiled. Kept in the card
-  // (not a toast) so the person can read "come back in 30 minutes".
-  const [pendingNotice, setPendingNotice] = useState('');
 
   // The "old processor" notice is NOT local state: the server remembers it
   // (info.cpu_unsupported) so it survives reloads and stops the update offers.
   function handleFailure(res, fallback) {
     if (res && res.error_code === 'cpu_unsupported') {
       load(false);
-      return;
-    }
-    if (res && res.error_code === 'compat_pending') {
-      setPendingNotice(res.error || res.message || '');
       return;
     }
     if (onNotify) onNotify((res && (res.error || res.message)) || fallback);
@@ -85,7 +78,6 @@ export function GowaSettings({ id, autoCheck, onAutoCheckChange, onNotify }) {
         setConfirmUnsupported(false);
         setConfirmRollback(false);
         if (d && d.error_code === 'cpu_unsupported') { /* load() below shows the card notice */ }
-        else if (d && d.error_code === 'compat_pending') setPendingNotice(d.message || '');
         else if (onNotify && d && d.message) onNotify(d.message);
         load(false);
       },
@@ -100,7 +92,6 @@ export function GowaSettings({ id, autoCheck, onAutoCheckChange, onNotify }) {
       return;
     }
     setWorking(true);
-    setPendingNotice('');
     setProgress({ phase: 'downloading', progress: 0 });
     try {
       const res = await installGowaUpdate(info.latest_version, !info.latest_supported);
@@ -121,7 +112,6 @@ export function GowaSettings({ id, autoCheck, onAutoCheckChange, onNotify }) {
   async function handleInstallRecommended() {
     if (!info || !info.recommended_version) return;
     setWorking(true);
-    setPendingNotice('');
     setProgress({ phase: 'downloading', progress: 0 });
     try {
       const res = await installGowaUpdate(info.recommended_version, false);
@@ -141,7 +131,6 @@ export function GowaSettings({ id, autoCheck, onAutoCheckChange, onNotify }) {
   async function handleInstallCpuFallback() {
     if (!info || !info.cpu_fallback_version) return;
     setWorking(true);
-    setPendingNotice('');
     setProgress({ phase: 'downloading', progress: 0 });
     try {
       const res = await installGowaUpdate(info.cpu_fallback_version, false);
@@ -358,13 +347,6 @@ export function GowaSettings({ id, autoCheck, onAutoCheckChange, onNotify }) {
                   Testar de novo
                 </button>
               </div>
-            </div>
-          ` : null}
-
-          ${pendingNotice && !working ? html`
-            <div id="gowa-compat-pending" role="status" class="mt-3 p-3 rounded-lg bg-blue-50 border border-blue-200 text-blue-900 text-xs leading-relaxed">
-              <strong class="block mb-1">Atualização em preparação</strong>
-              ${pendingNotice}
             </div>
           ` : null}
 
