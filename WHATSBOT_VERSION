@@ -1,6 +1,10 @@
 {
-  "version": "0.2.22",
+  "version": "0.2.23",
   "changelog": [
+    {
+      "version": "0.2.23",
+      "description": "- Correção: quando o download do GOWA falhava por lentidão ou queda de conexão, o painel mostrava por engano o aviso de processador antigo e parava de oferecer atualizações. Agora aparece uma mensagem de conexão, a versão atual continua funcionando e dá para tentar de novo\n- O download do GOWA tenta de novo sozinho e aguenta conexões lentas"
+    },
     {
       "version": "0.2.22",
       "description": "- Atualização do GOWA para as versões 9.8 em diante agora funciona também em processadores antigos (sem AVX2), em qualquer Linux amd64, sem nada para configurar\n- Se o GOWA instalado não abrir por causa do processador, o WhatsBot-Lite corrige sozinho ao iniciar, usando o binário da imagem oficial do GOWA\n- Quando nem isso resolve, o painel mostra o aviso de processador antigo e mantém a versão atual funcionando"
