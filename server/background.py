@@ -50,6 +50,19 @@ async def start_gowa_task(deps):
         state.notification = "GOWA não encontrado — modo sandbox disponível"
         logger.info("GOWA binary not found, sandbox-only mode.")
         await ws_manager.broadcast("gowa_status", {"message": state.notification})
+    except gowa_updater.GowaCpuIsaError:
+        # The GOWA shipped with this install cannot run on this CPU and the
+        # GHCR build could not be fetched (see gowa_updater.repair_at_boot).
+        # Same persistent notice as a failed update from the panel.
+        state.notification = gowa_updater.CPU_UNSUPPORTED_MESSAGE
+        logger.error("GOWA cannot run on this CPU and the GHCR build is unavailable.")
+        try:
+            await asyncio.to_thread(
+                gowa_updater.mark_cpu_unsupported, deps.settings,
+                gowa_updater.gowa_binary.installed_version())
+        except Exception as exc:
+            logger.warning("Could not record the CPU notice: %s", exc)
+        await ws_manager.broadcast("gowa_status", {"message": state.notification})
     except Exception as e:
         state.notification = "GOWA indisponível — modo sandbox disponível"
         logger.info("GOWA failed to start (%s), sandbox-only mode.", e)

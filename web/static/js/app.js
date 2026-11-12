@@ -314,7 +314,6 @@ function App({ onLogout, hasPassword }) {
   const [gowaInstalling, setGowaInstalling] = useState(false);
   const [gowaCpuNotice, setGowaCpuNotice] = useState('');
   const [gowaCpuFallback, setGowaCpuFallback] = useState('');
-  const [gowaPendingNotice, setGowaPendingNotice] = useState('');
   const [initialContactId, setInitialContactId] = useState(contactIdFromPath);
   const [initialMessageId, setInitialMessageId] = useState(contactMessageFromPath);
   const [wizardManual, setWizardManual] = useState(() => window.location.pathname === '/wizard');
@@ -547,8 +546,6 @@ function App({ onLogout, hasPassword }) {
         // Shown inside the modal, apart from the generic toast.
         setGowaCpuNotice(data.message || '');
         setGowaCpuFallback(data.cpu_fallback_version || '');
-      } else if (data && data.error_code === 'compat_pending') {
-        setGowaPendingNotice(data.message || '');
       } else {
         setNotification(data && data.message ? data.message : '');
       }
@@ -611,15 +608,12 @@ function App({ onLogout, hasPassword }) {
     setGowaInstalling(true);
     setGowaCpuNotice('');
     setGowaCpuFallback('');
-    setGowaPendingNotice('');
     setGowaProgress({ phase: 'downloading', progress: 0 });
     try {
       const res = await installGowaUpdate(gowaUpdate.latest_version, forceUnsupported);
       if (res && res.error_code === 'cpu_unsupported') {
         setGowaCpuNotice(res.error || '');
         setGowaCpuFallback(res.cpu_fallback_version || '');
-      } else if (res && res.error_code === 'compat_pending') {
-        setGowaPendingNotice(res.error || '');
       } else if (!res || !res.ok) {
         setNotification((res && res.error) || 'Falha ao atualizar o GOWA.');
       }
@@ -869,7 +863,6 @@ function App({ onLogout, hasPassword }) {
         cpuNotice=${gowaCpuNotice}
         cpuFallback=${gowaCpuFallback}
         onInstallFallback=${handleGowaInstallFallback}
-        pendingNotice=${gowaPendingNotice}
         onUpdateNow=${handleGowaUpdateNow}
         onLater=${() => {
           if (gowaUpdate.mode === MODE_RECOMMENDED) {

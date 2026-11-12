@@ -536,6 +536,7 @@ def _spawn_env(preset: dict[str, str] | None = None, drop: tuple[str, ...] = ("A
         fake_bin.write_text("x")
         with mock.patch.dict(os.environ, base, clear=True), \
              mock.patch.object(gowa_manager_mod, "_get_gowa_binary", return_value=fake_bin), \
+             mock.patch.object(mgr, "_ensure_runs_here", side_effect=lambda b: b), \
              mock.patch.object(gowa_manager_mod.subprocess, "Popen", side_effect=fake_popen), \
              mock.patch.object(gowa_manager_mod.threading, "Thread"):
             mgr.start()
@@ -655,150 +656,332 @@ check("a mensagem de CPU é em português e não técnica",
       and "AVX" not in gowa_updater.CPU_UNSUPPORTED_MESSAGE)
 
 # ═══════════════════════════════════════════════════════════════════
-section("Plano B: oficial sem AVX2 -> compat da pasta montada (só na hospedagem)")
+section("Plano B: oficial sem AVX2 -> binário da imagem oficial no GHCR (qualquer Linux amd64)")
 
-COMPAT = Path(tempfile.mkdtemp(prefix="whatsbot-gowa-compat-"))
-COMPAT_ENV = {"WHATSBOT_GOWA_COMPAT_URL": "file://" + str(COMPAT)}
+import gzip as _gzip  # noqa: E402
+import http.server as _http  # noqa: E402
+import io as _io  # noqa: E402
+import json as _json  # noqa: E402
+import tarfile as _tarfile  # noqa: E402
+import threading as _threading  # noqa: E402
 
 
-def publish_compat(version: str) -> None:
-    asset = f"whatsapp_{version}_linux_amd64_compat.zip"
-    zpath = COMPAT / asset
-    with zipfile.ZipFile(zpath, "w") as zf:
-        zf.writestr("linux-amd64", f"#!/bin/sh\nexit 0\n# compat {version}\n")
-    sha = hashlib.sha256(zpath.read_bytes()).hexdigest()
-    with (COMPAT / "checksums.txt").open("a") as fh:
-        fh.write(f"{sha}  {asset}\n")
+def _tgz(members: dict) -> bytes:
+    """tar.gz em memória. value bytes = arquivo regular; ("sym", alvo) = link simbólico."""
+    buf = _io.BytesIO()
+    with _tarfile.open(fileobj=buf, mode="w:gz") as tf:
+        for name, value in members.items():
+            info = _tarfile.TarInfo(name)
+            if isinstance(value, tuple):
+                info.type = _tarfile.SYMTYPE
+                info.linkname = value[1]
+                tf.addfile(info)
+            else:
+                info.size = len(value)
+                info.mode = 0o755
+                tf.addfile(info, _io.BytesIO(value))
+    return buf.getvalue()
+
+
+class FakeRegistry:
+    """Registry OCI falso: /token, /v2/<repo>/manifests/<ref>, /v2/<repo>/blobs/<digest>.
+
+    Os blobs respondem 307 para um segundo servidor (como o GHCR faz com
+    pkg-containers.githubusercontent.com), que registra o Authorization recebido.
+    """
+
+    def __init__(self):
+        self.images: dict[str, list[bytes]] = {}
+        self.blobs: dict[str, bytes] = {}
+        self.status: int | None = None   # força um código (404/429) em tudo
+        self.requests: list[str] = []
+        self.auth_seen_on_redirect: list = []
+        self.tamper: set[str] = set()
+        reg = self
+
+        class Blob(_http.BaseHTTPRequestHandler):
+            def log_message(self, *a):
+                pass
+
+            def do_GET(self):
+                reg.auth_seen_on_redirect.append(self.headers.get("Authorization"))
+                digest = self.path.rsplit("/", 1)[-1]
+                body = reg.blobs.get(digest, b"")
+                if digest in reg.tamper:
+                    body = body[:-1] + bytes([body[-1] ^ 1])
+                self.send_response(200)
+                self.send_header("Content-Length", str(len(body)))
+                self.end_headers()
+                self.wfile.write(body)
+
+        class Api(_http.BaseHTTPRequestHandler):
+            def log_message(self, *a):
+                pass
+
+            def _json(self, obj, ctype="application/json"):
+                data = _json.dumps(obj).encode()
+                self.send_response(200)
+                self.send_header("Content-Type", ctype)
+                self.send_header("Content-Length", str(len(data)))
+                self.end_headers()
+                self.wfile.write(data)
+
+            def do_GET(self):
+                reg.requests.append(self.path)
+                if reg.status:
+                    self.send_response(reg.status)
+                    self.end_headers()
+                    return
+                if self.path.startswith("/token"):
+                    return self._json({"token": "tok-123"})
+                if self.headers.get("Authorization") != "Bearer tok-123":
+                    self.send_response(401)
+                    self.end_headers()
+                    return
+                ref = self.path.rsplit("/", 1)[-1]
+                if "/manifests/" in self.path and ref.startswith("v"):
+                    if ref[1:] not in reg.images:
+                        self.send_response(404)
+                        self.end_headers()
+                        return
+                    return self._json({
+                        "mediaType": "application/vnd.oci.image.index.v1+json",
+                        "manifests": [
+                            {"digest": "sha256:" + "0" * 64,
+                             "platform": {"os": "unknown", "architecture": "unknown"}},
+                            {"digest": reg._manifest_digest(ref[1:]),
+                             "platform": {"os": "linux", "architecture": "amd64"}},
+                        ],
+                    }, "application/vnd.oci.image.index.v1+json")
+                if "/manifests/sha256:" in self.path:
+                    for version in reg.images:
+                        if reg._manifest_digest(version) == ref:
+                            return self._json({
+                                "mediaType": "application/vnd.oci.image.manifest.v1+json",
+                                "layers": [
+                                    {"digest": d, "size": len(reg.blobs[d]),
+                                     "mediaType": "application/vnd.oci.image.layer.v1.tar+gzip"}
+                                    for d in reg._layer_digests(version)
+                                ],
+                            }, "application/vnd.oci.image.manifest.v1+json")
+                    self.send_response(404)
+                    self.end_headers()
+                    return
+                if "/blobs/" in self.path:
+                    self.send_response(307)
+                    self.send_header("Location", f"http://127.0.0.1:{reg.blob_port}/b/{ref}")
+                    self.end_headers()
+                    return
+                self.send_response(404)
+                self.end_headers()
+
+        self._blob_srv = _http.ThreadingHTTPServer(("127.0.0.1", 0), Blob)
+        self._api_srv = _http.ThreadingHTTPServer(("127.0.0.1", 0), Api)
+        self.blob_port = self._blob_srv.server_port
+        self.url = f"http://127.0.0.1:{self._api_srv.server_port}"
+        for srv in (self._blob_srv, self._api_srv):
+            _threading.Thread(target=srv.serve_forever, daemon=True).start()
+
+    def _manifest_digest(self, version):
+        return "sha256:" + hashlib.sha256(f"manifest-{version}".encode()).hexdigest()
+
+    def _layer_digests(self, version):
+        return ["sha256:" + hashlib.sha256(b).hexdigest() for b in self.images[version]]
+
+    def publish(self, version, layers: list[dict]):
+        blobs = [_tgz(m) for m in layers]
+        self.images[version] = blobs
+        for b in blobs:
+            self.blobs["sha256:" + hashlib.sha256(b).hexdigest()] = b
+
+    def blob_requests(self):
+        return [p for p in self.requests if "/blobs/" in p]
+
+    def close(self):
+        for srv in (self._blob_srv, self._api_srv):
+            srv.shutdown()
+
+
+LOADER_BYTES = b"#!/bin/sh\n# fake musl loader\nexec \"$@\"\n"
+
+
+def ghcr_image(version, *, binary=True, loader=True, extra=None):
+    """Camadas parecidas com as reais: alpine+loader, ffmpeg grande, binário (2x)."""
+    bin_bytes = f"#!/bin/sh\nexit 0\n# ghcr {version}\n".encode()
+    extra = os.urandom(200000) if extra is None else extra  # não comprime: é a maior camada
+    layers = [{"lib/ld-musl-x86_64.so.1": LOADER_BYTES} if loader else {"etc/alpine": b"a"}]
+    layers.append({"usr/bin/ffmpeg": extra})
+    layers.append({"app/whatsapp": bin_bytes} if binary else {"app/other": b"o"})
+    if binary:
+        layers.append({"app/whatsapp": bin_bytes, "app/entrypoint.sh": b"#!/bin/sh\n"})
+    return layers
+
+
+REG = FakeRegistry()
+REG_ENV = {"WHATSBOT_GOWA_REGISTRY": REG.url}
 
 
 def _first_fails(rc=127, stderr=b"./linux-amd64: CPU ISA level is lower than required\n"):
-    """1a chamada (oficial) = CPU incompatível; as seguintes (compat) = ok."""
-    calls = {"n": 0}
+    """1a chamada (oficial) = CPU incompatível; as seguintes (GHCR, pelo carregador) = ok."""
+    calls = {"n": 0, "cmds": []}
 
-    def run(*_a, **_k):
+    def run(cmd, *_a, **_k):
         calls["n"] += 1
+        calls["cmds"].append([str(c) for c in cmd])
         if calls["n"] == 1:
             return _sp.CompletedProcess([], rc, stdout=b"", stderr=stderr)
         return _sp.CompletedProcess([], 0, stdout=b"usage", stderr=b"")
     return mock.patch.object(gowa_updater.subprocess, "run", side_effect=run), calls
 
 
-def _download_spy():
-    urls = []
-    real = gowa_updater._download
-
-    def spy(url, *a, **k):
-        urls.append(url)
-        return real(url, *a, **k)
-    return mock.patch.object(gowa_updater, "_download", side_effect=spy), urls
-
-
-# --- sem env: plano B não existe -------------------------------------
+# --- registry: padrão e override -------------------------------------
 with mock.patch.dict(os.environ, {}, clear=False):
-    os.environ.pop("WHATSBOT_GOWA_COMPAT_URL", None)
-    check("sem a env não há base compat (sem endereço padrão)", gowa_updater.compat_base_url() == "")
-for bad in ["http://10.0.0.1/x", "ftp://x/y", "/opt/gowa-compat", "file:///opt/x?y=1", "javascript:x"]:
-    with mock.patch.dict(os.environ, {"WHATSBOT_GOWA_COMPAT_URL": bad}):
-        check(f"base inválida ignorada: {bad!r}", gowa_updater.compat_base_url() == "")
-for good in ["file:///opt/gowa-compat", "file:///opt/gowa-compat/", "https://x.example/gowa-compat"]:
-    with mock.patch.dict(os.environ, {"WHATSBOT_GOWA_COMPAT_URL": good}):
-        check(f"base aceita: {good!r}", gowa_updater.compat_base_url() == good.rstrip("/"))
+    os.environ.pop("WHATSBOT_GOWA_REGISTRY", None)
+    check("sem env: registry é o GHCR (nada a configurar)", gowa_updater.registry_base() == "https://ghcr.io")
+for bad in ["ftp://x/y", "file:///opt/x", "/opt/x", "https://x/y?a=1", "javascript:x", "https://"]:
+    with mock.patch.dict(os.environ, {"WHATSBOT_GOWA_REGISTRY": bad}):
+        check(f"override inválido ignorado: {bad!r}", gowa_updater.registry_base() == "https://ghcr.io")
+with mock.patch.dict(os.environ, {"WHATSBOT_GOWA_REGISTRY": "https://espelho.example/"}):
+    check("override http(s) aceito", gowa_updater.registry_base() == "https://espelho.example")
+check("a env antiga do compat não existe mais", not hasattr(gowa_updater, "compat_base_url"))
 
 if (OS_, ARCH) == ("linux", "amd64"):
-    shutil.rmtree(gowa_binary.managed_dir(), ignore_errors=True)
+    REG.publish("9.9.0", ghcr_image("9.9.0"))
     publish("9.9.0")
-    publish_compat("9.9.0")
 
-    # sem env + CPU incompatível -> aviso, compat nunca consultado
-    os.environ.pop("WHATSBOT_GOWA_COMPAT_URL", None)
-    patcher, calls = _first_fails()
-    spy, urls = _download_spy()
-    with patcher, spy:
-        res = gowa_updater.install("9.9.0", manager=MagicMock(), client=client)
-    check("sem env: CPU incompatível falha sem trocar nada",
-          res["ok"] is False and res["rolled_back"] is False, str(res))
-    check("sem env: error_code=cpu_unsupported", res.get("error_code") == "cpu_unsupported", str(res))
-    check("sem env: mensagem de processador antigo", res["message"] == gowa_updater.CPU_UNSUPPORTED_MESSAGE)
-    check("sem env: compat nunca consultado", not any("compat" in u for u in urls), str(urls))
-    check("sem env: nada instalado", not gowa_binary.managed_binary_path().exists())
-
-    with mock.patch.dict(os.environ, COMPAT_ENV):
-        # file:// + cpu isa -> compat instala
-        patcher, calls = _first_fails()
-        spy, urls = _download_spy()
-        with patcher, spy:
-            res = gowa_updater.install("9.9.0", manager=MagicMock(), client=client)
-        meta = gowa_binary.read_meta()
-        check("file://: oficial falha com cpu isa -> compat instala", res["ok"] is True, str(res))
-        check("file://: download veio da pasta montada",
-              any(u.startswith("file://") and u.endswith("_compat.zip") for u in urls), str(urls))
-        check("smoke test rodou 2x (oficial + compat)", calls["n"] == 2, str(calls["n"]))
-        check("meta grava flavor=compat", meta.get("flavor") == "compat", str(meta))
-        check("meta grava checksum verificado", meta.get("checksum") == "verified", str(meta))
-        check("meta grava o asset compat", meta.get("asset", "").endswith("_compat.zip"), str(meta))
-        check("binário gerenciado é o compat",
-              b"compat 9.9.0" in gowa_binary.managed_binary_path().read_bytes())
-
-        # SIGILL também aciona o plano B
+    with mock.patch.dict(os.environ, REG_ENV):
+        # --- caminho feliz ------------------------------------------
         shutil.rmtree(gowa_binary.managed_dir(), ignore_errors=True)
-        patcher, calls = _first_fails(rc=-4, stderr=b"")
+        REG.requests.clear()
+        REG.auth_seen_on_redirect.clear()
+        patcher, calls = _first_fails()
         with patcher:
             res = gowa_updater.install("9.9.0", manager=MagicMock(), client=client)
-        check("SIGILL (-4) no oficial -> compat instala", res["ok"] is True
-              and gowa_binary.read_meta().get("flavor") == "compat", str(res))
+        meta = gowa_binary.read_meta()
+        check("oficial falha por CPU -> GHCR instala", res["ok"] is True, str(res))
+        check("meta grava flavor=ghcr", meta.get("flavor") == "ghcr", str(meta))
+        check("meta grava checksum verificado (digest das camadas)", meta.get("checksum") == "verified", str(meta))
+        check("meta grava a imagem de origem", meta.get("asset") == "ghcr.io/aldinokemal/go-whatsapp-web-multidevice:v9.9.0", str(meta))
+        check("binário gerenciado é o da imagem", b"ghcr 9.9.0" in gowa_binary.managed_binary_path().read_bytes())
+        check("carregador gravado em storages/bin", gowa_binary.loader_path().read_bytes() == LOADER_BYTES)
+        check("smoke test do GHCR roda pelo carregador",
+              len(calls["cmds"]) == 2 and calls["cmds"][1][0].endswith("ld-musl-x86_64.so.1")
+              and calls["cmds"][1][-1] == "--help", str(calls["cmds"]))
+        _ffmpeg = max(REG._layer_digests("9.9.0"), key=lambda d: len(REG.blobs[d]))
+        check("a camada grande (ffmpeg) não foi baixada",
+              REG.blob_requests() and not any(_ffmpeg in p for p in REG.blob_requests()),
+              str(REG.blob_requests()))
+        check("o token NÃO vai para o host do redirect dos blobs",
+              REG.auth_seen_on_redirect and all(a is None for a in REG.auth_seen_on_redirect),
+              str(REG.auth_seen_on_redirect))
+        check("nada sobra em storages/bin/.tmp", not gowa_binary.tmp_dir().exists())
 
-        # compat inexistente -> mantém a versão atual, mensagem genérica
-        before = gowa_binary.managed_binary_path().read_bytes()
+        # --- o manager inicia pelo carregador -----------------------
+        musl_elf = Path(tempfile.mkdtemp()) / "gowa"
+        with mock.patch.object(gowa_binary, "elf_interpreter", return_value="/lib/ld-musl-x86_64.so.1"):
+            prefix = gowa_binary.launch_prefix(gowa_binary.managed_binary_path())
+        check("binário musl + carregador presente -> inicia pelo carregador",
+              prefix == [str(gowa_binary.loader_path())], str(prefix))
+        with mock.patch.object(gowa_binary, "elf_interpreter", return_value="/lib64/ld-linux-x86-64.so.2"):
+            check("binário glibc (oficial / compat antigo) -> inicia direto",
+                  gowa_binary.launch_prefix(gowa_binary.managed_binary_path()) == [])
+
+        # --- rollback depois de uma instalação ghcr -----------------
         publish("9.10.0")
+        REG.publish("9.10.0", ghcr_image("9.10.0"))
         patcher, calls = _first_fails()
         with patcher:
             res = gowa_updater.install("9.10.0", manager=MagicMock(), client=client)
-        check("compat ausente -> falha sem rollback (nada foi trocado)",
-              res["ok"] is False and res["rolled_back"] is False, str(res))
-        check("compat ainda não compilado -> aviso de 'retorne em 30 minutos'",
-              res["message"] == gowa_updater.COMPAT_PENDING_MESSAGE
-              and "30 minutos" in res["message"], str(res))
-        check("compat ainda não compilado -> error_code=compat_pending",
-              res.get("error_code") == "compat_pending", str(res))
-        check("compat ausente -> binário atual intacto",
-              gowa_binary.managed_binary_path().read_bytes() == before)
+        check("segunda instalação ghcr (9.9.0 -> 9.10.0)", res["ok"] is True, str(res))
+        res = gowa_updater.rollback(manager=MagicMock(), client=client)
+        check("rollback depois de ghcr volta para 9.9.0",
+              res["ok"] is True and gowa_binary.installed_version() == "9.9.0", str(res))
+        check("rollback mantém o carregador (não entra no .bak)",
+              gowa_binary.loader_path().read_bytes() == LOADER_BYTES)
+        check("rollback restaurou o binário ghcr 9.9.0",
+              b"ghcr 9.9.0" in gowa_binary.managed_binary_path().read_bytes())
 
-        # zip já publicado mas checksums.txt ainda sem a linha (publicação em curso)
-        publish("9.12.0")
-        _asset12 = "whatsapp_9.12.0_linux_amd64_compat.zip"
-        with zipfile.ZipFile(COMPAT / _asset12, "w") as zf:
-            zf.writestr("linux-amd64", "#!/bin/sh\nexit 0\n")
-        patcher, calls = _first_fails()
-        with patcher:
-            res = gowa_updater.install("9.12.0", manager=MagicMock(), client=client)
-        check("zip sem checksum ainda -> 'retorne em 30 minutos' (compat_pending)",
-              res["ok"] is False and res.get("error_code") == "compat_pending"
-              and res["message"] == gowa_updater.COMPAT_PENDING_MESSAGE, str(res))
-        check("zip sem checksum ainda -> binário atual intacto",
-              gowa_binary.managed_binary_path().read_bytes() == before)
+        before = gowa_binary.managed_binary_path().read_bytes()
 
-        # checksum adulterado -> recusa
+        def _fails_keeps(version, title):
+            patcher, _ = _first_fails()
+            with patcher:
+                r = gowa_updater.install(version, manager=MagicMock(), client=client)
+            check(f"{title} -> aviso de processador antigo, nada trocado",
+                  r["ok"] is False and r["rolled_back"] is False
+                  and r.get("error_code") == "cpu_unsupported", str(r))
+            check(f"{title} -> binário atual intacto",
+                  gowa_binary.managed_binary_path().read_bytes() == before)
+            return r
+
+        # --- camada adulterada --------------------------------------
         publish("9.11.0")
-        publish_compat("9.11.0")
-        (COMPAT / "whatsapp_9.11.0_linux_amd64_compat.zip").write_bytes(b"adulterado")
-        patcher, calls = _first_fails()
+        REG.publish("9.11.0", ghcr_image("9.11.0"))
+        REG.tamper = set(REG._layer_digests("9.11.0"))
+        patcher, _ = _first_fails()
         with patcher:
-            res = gowa_updater.install("9.11.0", manager=MagicMock(), client=client)
-        check("compat com checksum errado é recusado", res["ok"] is False
-              and "checksum" in res["message"], str(res))
-        check("checksum errado -> binário atual intacto",
+            r = gowa_updater.install("9.11.0", manager=MagicMock(), client=client)
+        REG.tamper = set()
+        check("camada adulterada é recusada (mensagem de integridade)",
+              r["ok"] is False and "checksum" in r["message"], str(r))
+        check("camada adulterada -> binário atual intacto",
               gowa_binary.managed_binary_path().read_bytes() == before)
 
-        # CPU nova: oficial passa, compat nunca é consultado
+        # --- imagem sem o binário / sem o carregador ----------------
+        publish("9.12.0")
+        REG.publish("9.12.0", ghcr_image("9.12.0", binary=False))
+        _fails_keeps("9.12.0", "imagem sem app/whatsapp")
+        publish("9.13.0")
+        REG.publish("9.13.0", ghcr_image("9.13.0", loader=False))
+        _fails_keeps("9.13.0", "imagem sem o carregador musl")
+
+        # --- tag inexistente, limite --------------------------------
+        publish("9.14.0")
+        _fails_keeps("9.14.0", "tag inexistente no GHCR (404)")
+        REG.status = 429
+        _fails_keeps("9.9.0", "limite do registry (429)")
+        REG.status = None
+
+        # --- membros perigosos --------------------------------------
+        for title, layer in [
+            ("app/whatsapp como link simbólico", {"app/whatsapp": ("sym", "/etc/passwd")}),
+            ("carregador como link simbólico", {"lib/ld-musl-x86_64.so.1": ("sym", "../../x")}),
+        ]:
+            publish("9.15.0")
+            REG.publish("9.15.0", [layer, {"app/whatsapp": b"#!/bin/sh\n", "lib/ld-musl-x86_64.so.1": b"x"}])
+            _fails_keeps("9.15.0", title)
+        publish("9.16.0")
+        REG.publish("9.16.0", [{"../../evil": b"x", "/abs/evil": b"x"}] + ghcr_image("9.16.0"))
+        patcher, _ = _first_fails()
+        with patcher:
+            r = gowa_updater.install("9.16.0", manager=MagicMock(), client=client)
+        check("membros com '..' e caminho absoluto são ignorados (nunca extraídos)",
+              r["ok"] is True and not (ROOT / "evil").exists()
+              and not Path("/abs/evil").exists() and not (gowa_binary.managed_dir().parent.parent / "evil").exists(),
+              str(r))
+
+        # --- CPU nova: GHCR nunca consultado ------------------------
         shutil.rmtree(gowa_binary.managed_dir(), ignore_errors=True)
-        spy, urls = _download_spy()
-        with _fake_run(0), spy:
+        REG.requests.clear()
+        with _fake_run(0):
             res = gowa_updater.install("9.9.0", manager=MagicMock(), client=client)
         check("CPU nova usa o oficial (flavor=official)",
               res["ok"] and gowa_binary.read_meta().get("flavor") == "official", str(res))
-        check("CPU nova: compat nunca consultado", not any("compat" in u for u in urls), str(urls))
+        check("CPU nova: GHCR nunca consultado", REG.requests == [], str(REG.requests))
+        check("CPU nova: nenhum carregador gravado", not gowa_binary.loader_path().exists())
 
-# Windows / Mac nunca tentam o compat, mesmo com a env definida
+        # --- cliente antigo com flavor=compat continua direto -------
+        shutil.rmtree(gowa_binary.managed_dir(), ignore_errors=True)
+        gowa_binary.managed_dir(create=True)
+        gowa_binary.managed_binary_path().write_bytes(b"#!/bin/sh\nexit 0\n# compat\n")
+        gowa_binary.write_meta({"version": "9.9.0", "flavor": "compat", "installed_at": time.time()})
+        with mock.patch.object(gowa_binary, "elf_interpreter", return_value="/lib64/ld-linux-x86-64.so.2"):
+            check("flavor=compat (glibc) inicia direto, sem carregador",
+                  gowa_binary.launch_prefix(gowa_binary.managed_binary_path()) == [])
+        check("flavor=compat continua sendo o binário resolvido",
+              gowa_binary.resolve_binary()[1] == "managed" and gowa_binary.installed_version() == "9.9.0")
+
+# Windows / Mac / Linux arm64 nunca consultam o GHCR
 for plat in [("windows", "amd64"), ("darwin", "amd64"), ("darwin", "arm64"), ("linux", "arm64")]:
     shutil.rmtree(gowa_binary.managed_dir(), ignore_errors=True)
     asset = gowa_updater.asset_name("9.9.0", *plat)
@@ -810,15 +993,164 @@ for plat in [("windows", "amd64"), ("darwin", "amd64"), ("darwin", "arm64"), ("l
     (RELEASE / gowa_updater.checksums_asset(plat[0])).write_text(
         "\n".join(f"{v}  {k}" for k, v in _checksums.items()) + "\n")
     patcher, calls = _first_fails(rc=rc, stderr=b"")
-    spy, urls = _download_spy()
-    with mock.patch.dict(os.environ, COMPAT_ENV), patcher, spy, \
+    REG.requests.clear()
+    with mock.patch.dict(os.environ, REG_ENV), patcher, \
          mock.patch.object(gowa_updater, "detect_platform", return_value=plat):
         res = gowa_updater.install("9.9.0", manager=MagicMock(), client=client)
     check(f"{'/'.join(plat)}: CPU incompatível vira aviso (rc={rc})",
           res["ok"] is False and res.get("error_code") == "cpu_unsupported", str(res))
-    check(f"{'/'.join(plat)}: compat nunca consultado", not any("compat" in u for u in urls), str(urls))
+    check(f"{'/'.join(plat)}: GHCR nunca consultado", REG.requests == [], str(REG.requests))
 
-shutil.rmtree(COMPAT, ignore_errors=True)
+# ═══════════════════════════════════════════════════════════════════
+section("Boot: binário empacotado que não abre na CPU é corrigido antes de iniciar")
+
+if (OS_, ARCH) == ("linux", "amd64"):
+    with mock.patch.dict(os.environ, REG_ENV):
+        os.environ.pop("WHATSBOT_GOWA_BINARY", None)
+        shutil.rmtree(gowa_binary.managed_dir(), ignore_errors=True)
+        REG.publish("8.8.0", ghcr_image("8.8.0"))  # bundled do teste = 8.8.0 (bin/gowa.version)
+        bundled = gowa_binary.bundled_binary_path()
+
+        def _boot_run(first_rc=127):
+            """Oficial empacotado: CPU incompatível; qualquer outro: ok."""
+            calls = {"cmds": []}
+
+            def run(cmd, *_a, **_k):
+                calls["cmds"].append([str(c) for c in cmd])
+                if str(cmd[0]) == str(bundled):
+                    return _sp.CompletedProcess([], first_rc, stdout=b"",
+                                                stderr=b"CPU ISA level is lower than required\n")
+                return _sp.CompletedProcess([], 0, stdout=b"usage", stderr=b"")
+            return mock.patch.object(gowa_updater.subprocess, "run", side_effect=run), calls
+
+        def _boot_start(mgr):
+            spawned = {}
+
+            def fake_popen(cmd, **kwargs):
+                spawned["cmd"] = [str(c) for c in cmd]
+                proc = MagicMock()
+                proc.poll.return_value = None
+                proc.pid = 4321
+                return proc
+            # threading do módulo trocado só ali: o registry falso precisa das threads reais
+            with mock.patch.object(gowa_manager_mod.subprocess, "Popen", side_effect=fake_popen), \
+                 mock.patch.object(gowa_manager_mod, "threading"), \
+                 mock.patch.object(gowa_binary, "elf_interpreter",
+                                   side_effect=lambda p: "/lib/ld-musl-x86_64.so.1"
+                                   if Path(p) == gowa_binary.managed_binary_path()
+                                   else "/lib64/ld-linux-x86-64.so.2"):
+                mgr.start()
+            mgr._process = None
+            return spawned.get("cmd", [])
+
+        mgr = gowa_manager_mod.GOWAManager(port=3999, data_dir=Path(tempfile.mkdtemp()))
+        REG.requests.clear()
+        patcher, calls = _boot_run()
+        with patcher:
+            cmd = _boot_start(mgr)
+        meta = gowa_binary.read_meta()
+        check("boot: empacotado falha por CPU -> GHCR instalado em storages/bin",
+              meta.get("flavor") == "ghcr" and meta.get("version") == "8.8.0"
+              and meta.get("installed_by") == "boot", str(meta))
+        check("boot: inicia pelo carregador o binário corrigido",
+              cmd[:2] == [str(gowa_binary.loader_path()), str(gowa_binary.managed_binary_path())]
+              and cmd[2] == "rest", str(cmd))
+        n_blobs = len(REG.blob_requests())
+        check("boot: baixou do GHCR uma vez", n_blobs > 0, str(REG.requests))
+
+        # restart do watchdog / segundo start no mesmo processo: nada de novo
+        patcher, calls2 = _boot_run()
+        with patcher:
+            cmd2 = _boot_start(mgr)
+        check("boot: restart do watchdog não baixa de novo", len(REG.blob_requests()) == n_blobs)
+        check("boot: restart nem repete o teste", calls2["cmds"] == [], str(calls2["cmds"]))
+
+        # reiniciar o WhatsBot (manager novo): testa (1-2 s), não baixa
+        mgr2 = gowa_manager_mod.GOWAManager(port=3999, data_dir=Path(tempfile.mkdtemp()))
+        patcher, calls3 = _boot_run()
+        with patcher:
+            cmd3 = _boot_start(mgr2)
+        check("boot: segundo start do WhatsBot NÃO baixa de novo", len(REG.blob_requests()) == n_blobs,
+              str(REG.blob_requests()))
+        check("boot: segundo start testa o binário corrigido pelo carregador",
+              calls3["cmds"] and calls3["cmds"][0][0] == str(gowa_binary.loader_path()), str(calls3["cmds"]))
+        check("boot: segundo start usa o mesmo binário corrigido", cmd3[:2] == cmd[:2], str(cmd3))
+
+        # CPU nova: nada é baixado
+        shutil.rmtree(gowa_binary.managed_dir(), ignore_errors=True)
+        REG.requests.clear()
+        mgr3 = gowa_manager_mod.GOWAManager(port=3999, data_dir=Path(tempfile.mkdtemp()))
+        with _fake_run(0):
+            cmd4 = _boot_start(mgr3)
+        check("boot com CPU nova: GHCR nunca consultado", REG.requests == [], str(REG.requests))
+        check("boot com CPU nova: inicia o empacotado direto", cmd4[:2] == [str(bundled), "rest"], str(cmd4))
+
+        # sem plano B possível: aviso e nada iniciado (sem loop de restart)
+        shutil.rmtree(gowa_binary.managed_dir(), ignore_errors=True)
+        REG.status = 404
+        mgr4 = gowa_manager_mod.GOWAManager(port=3999, data_dir=Path(tempfile.mkdtemp()))
+        patcher, _ = _boot_run()
+        raised = None
+        with patcher:
+            try:
+                _boot_start(mgr4)
+            except gowa_updater.GowaCpuIsaError as exc:
+                raised = exc
+        REG.status = None
+        check("boot sem GHCR: GowaCpuIsaError (aviso de processador antigo)", raised is not None)
+        check("boot sem GHCR: nada iniciado, nada instalado",
+              mgr4._process is None and not gowa_binary.managed_binary_path().exists())
+
+        # versão desconhecida: não há tag para baixar
+        sidecar = gowa_binary.bundled_version_file_path()
+        saved = sidecar.read_text()
+        sidecar.unlink()
+        REG.requests.clear()
+        mgr5 = gowa_manager_mod.GOWAManager(port=3999, data_dir=Path(tempfile.mkdtemp()))
+        patcher, _ = _boot_run()
+        raised = None
+        with patcher:
+            try:
+                _boot_start(mgr5)
+            except gowa_updater.GowaCpuIsaError as exc:
+                raised = exc
+        sidecar.write_text(saved)
+        check("boot com versão desconhecida: aviso, GHCR nunca consultado",
+              raised is not None and REG.requests == [], str(REG.requests))
+
+        # durante uma instalação (lock ocupado) o boot não testa nem baixa
+        gowa_updater._UPDATE_LOCK.acquire()
+        try:
+            REG.requests.clear()
+            with _fake_run(127, b"CPU ISA level is lower than required"):
+                check("boot com instalação em andamento: não interfere",
+                      gowa_updater.repair_at_boot(bundled) is False and REG.requests == [])
+        finally:
+            gowa_updater._UPDATE_LOCK.release()
+
+        # Windows/Mac: nunca
+        with mock.patch.object(gowa_updater, "detect_platform", return_value=("windows", "amd64")), \
+             _fake_run(3221225501):
+            check("boot no Windows: nada a fazer", gowa_updater.repair_at_boot(bundled) is False)
+
+REG.close()
+
+# ═══════════════════════════════════════════════════════════════════
+section("elf_interpreter: lê o carregador pedido pelo binário")
+
+_tmp_elf = Path(tempfile.mkdtemp())
+for real in [Path("/bin/ls"), Path(sys.executable)]:
+    if real.exists() and sys.platform == "linux":
+        interp = gowa_binary.elf_interpreter(real)
+        check(f"{real.name}: interpretador glibc ou vazio (estático)",
+              interp == "" or interp.startswith("/lib"), interp)
+        break
+(_tmp_elf / "txt").write_bytes(b"#!/bin/sh\n")
+check("arquivo que não é ELF -> ''", gowa_binary.elf_interpreter(_tmp_elf / "txt") == "")
+check("arquivo inexistente -> ''", gowa_binary.elf_interpreter(_tmp_elf / "nada") == "")
+(_tmp_elf / "trunc").write_bytes(b"\x7fELF\x02\x01" + b"\0" * 10)
+check("ELF truncado -> ''", gowa_binary.elf_interpreter(_tmp_elf / "trunc") == "")
+shutil.rmtree(_tmp_elf, ignore_errors=True)
 
 # ═══════════════════════════════════════════════════════════════════
 section("GOWA novo que morre por instrução ilegal logo após subir: rollback + aviso de CPU")

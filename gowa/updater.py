@@ -21,9 +21,11 @@ import re
 import shutil
 import subprocess
 import sys
+import tarfile
 import threading
 import time
 import urllib.error
+import urllib.parse
 import urllib.request
 import zipfile
 from pathlib import Path
@@ -43,23 +45,39 @@ GOWA_RELEASE_DOWNLOAD = (
 )
 GOWA_RELEASE_PAGE = f"https://github.com/{GOWA_GH_REPO}/releases/tag/v{{version}}"
 
-# Plan B for Linux amd64 CPUs without AVX2 (hosting only): the same upstream tag
-# rebuilt with x86-64 baseline compiler flags. There is NO default: only the
-# hosting sets WHATSBOT_GOWA_COMPAT_URL (``file:///opt/gowa-compat``, a read-only
-# bind mount). Without it, an incompatible CPU gets the "old processor" notice.
-_COMPAT_ENV = "WHATSBOT_GOWA_COMPAT_URL"
-_COMPAT_SCHEMES = ("file://", "https://")
+# Plan B for Linux amd64 CPUs without AVX2: the official GOWA Docker image on
+# GHCR. The author builds it on Alpine (musl) and that build does not need AVX2,
+# unlike the release zip. We take only ``app/whatsapp`` and the musl loader
+# ``lib/ld-musl-x86_64.so.1`` out of it and run the binary through the loader
+# (gowa/binary.py:launch_prefix). Works on any Linux amd64, nothing to configure.
+GOWA_GHCR_REPO = GOWA_GH_REPO
+GOWA_GHCR_REGISTRY = "https://ghcr.io"
+# Tests / a future mirror only. Nobody has to set it.
+_REGISTRY_ENV = "WHATSBOT_GOWA_REGISTRY"
+_GHCR_BINARY_MEMBER = "app/whatsapp"
+_GHCR_LOADER_MEMBER = "lib/" + gowa_binary.LOADER_NAME
+_GHCR_MAX_LAYER_BYTES = 200 * 1024 * 1024
+_GHCR_MAX_JSON_BYTES = 4 * 1024 * 1024
+_OCI_INDEX_ACCEPT = (
+    "application/vnd.oci.image.index.v1+json, "
+    "application/vnd.docker.distribution.manifest.list.v2+json"
+)
+_OCI_MANIFEST_ACCEPT = (
+    "application/vnd.oci.image.manifest.v1+json, "
+    "application/vnd.docker.distribution.manifest.v2+json"
+)
+_DIGEST_RE = re.compile(r"^sha256:[0-9a-f]{64}$")
 
 
-def compat_base_url() -> str:
-    """Validated compat base from the env, or '' when unset/invalid."""
-    base = os.environ.get(_COMPAT_ENV, "").strip().rstrip("/")
+def registry_base() -> str:
+    """GHCR, or the ``WHATSBOT_GOWA_REGISTRY`` override when it is a valid http(s) base."""
+    base = os.environ.get(_REGISTRY_ENV, "").strip().rstrip("/")
     if not base:
-        return ""
-    if not base.lower().startswith(_COMPAT_SCHEMES) or any(c in base for c in "?#"):
-        logger.error("%s=%r ignored: only file:// or https:// bases are accepted.",
-                     _COMPAT_ENV, base)
-        return ""
+        return GOWA_GHCR_REGISTRY
+    parsed = urllib.parse.urlparse(base)
+    if parsed.scheme not in ("http", "https") or not parsed.netloc or any(c in base for c in "?#"):
+        logger.error("%s=%r ignored: only http(s) bases are accepted.", _REGISTRY_ENV, base)
+        return GOWA_GHCR_REGISTRY
     return base
 
 # Versions the WhatsBot-Lite client is known to talk to. Anything outside this range
@@ -104,14 +122,6 @@ LAST_CPU_COMPATIBLE_VERSION = "9.7.0"
 # offering newer GOWA versions again (value = the version that failed).
 # "Testar de novo" in the panel clears it (e.g. after moving to a new computer).
 CPU_FLAG_KEY = "gowa_cpu_unsupported"
-
-# Hosting only: the compat build of this version has not been published yet (the
-# server's timer compiles it, usually within 30 minutes).
-COMPAT_PENDING_CODE = "compat_pending"
-COMPAT_PENDING_MESSAGE = (
-    "Estamos verificando e baixando a nova versão do GOWA, retorne daqui a 30 minutos "
-    "para a atualização ser concluída. A versão atual continua funcionando."
-)
 
 # How an illegal-instruction crash shows up in subprocess.returncode:
 #   Linux/macOS: killed by SIGILL -> -4.  Windows: STATUS_ILLEGAL_INSTRUCTION.
@@ -188,15 +198,6 @@ class GowaCpuIsaError(GowaUpdateError):
     error_code = CPU_UNSUPPORTED_CODE
 
     def __init__(self, message: str = CPU_UNSUPPORTED_MESSAGE):
-        super().__init__(message)
-
-
-class GowaCompatPendingError(GowaUpdateError):
-    """Hosting: the compat build for this version is not on the shared folder yet."""
-
-    error_code = COMPAT_PENDING_CODE
-
-    def __init__(self, message: str = COMPAT_PENDING_MESSAGE):
         super().__init__(message)
 
 
@@ -707,15 +708,6 @@ def _download(url: str, dest: Path, on_progress=None, label: str = "") -> Path:
     return dest
 
 
-def _is_missing_remote(exc) -> bool:
-    """True when a download failed because the file is simply not there (404 / no such file)."""
-    if isinstance(exc, urllib.error.HTTPError):
-        return exc.code == 404
-    if isinstance(exc, urllib.error.URLError):
-        return isinstance(exc.reason, FileNotFoundError)
-    return False
-
-
 def _fetch_checksums(version: str, os_: str) -> dict[str, str]:
     """Return ``{asset_name: sha256}`` from the release's checksums file."""
     url = GOWA_RELEASE_DOWNLOAD.format(version=version, asset=checksums_asset(os_))
@@ -727,24 +719,6 @@ def _fetch_checksums(version: str, os_: str) -> dict[str, str]:
         logger.warning("Could not fetch GOWA checksums (%s): %s", url, exc)
         return {}
 
-    sums: dict[str, str] = {}
-    for line in text.splitlines():
-        parts = line.split()
-        if len(parts) >= 2:
-            sums[parts[-1]] = parts[0].lower()
-    return sums
-
-
-def _fetch_compat_checksums(base: str) -> dict[str, str]:
-    """``{asset: sha256}`` from the compat base. Empty on any failure (= refuse)."""
-    url = f"{base}/checksums.txt"
-    req = urllib.request.Request(url, headers={"User-Agent": _UA})
-    try:
-        with urllib.request.urlopen(req, timeout=_API_TIMEOUT_SEC) as resp:
-            text = resp.read().decode("utf-8", errors="replace")
-    except (urllib.error.URLError, urllib.error.HTTPError, TimeoutError, OSError) as exc:
-        logger.warning("Could not fetch compat checksums (%s): %s", url, exc)
-        return {}
     sums: dict[str, str] = {}
     for line in text.splitlines():
         parts = line.split()
@@ -800,7 +774,7 @@ def _clear_quarantine(path: Path) -> None:
         logger.warning("xattr failed on %s: %s", path, exc)
 
 
-def _smoke_test(path: Path) -> None:
+def _smoke_test(path: Path, loader: Path | None = None) -> None:
     """Run the binary once to prove this machine can execute it at all.
 
     Checked before we touch the binary currently in use. The exit code of
@@ -808,11 +782,12 @@ def _smoke_test(path: Path) -> None:
     than the build requires (``CPU ISA level is lower than required``, Go
     ``GOAMD64`` / glibc) does not raise OSError, it exits 127 with that text,
     so it has to be recognised from the output.
+
+    ``loader``: the musl loader of a GHCR binary (``loader binary --help``).
     """
+    cmd = ([str(loader)] if loader else []) + [str(path), "--help"]
     try:
-        proc = subprocess.run(
-            [str(path), "--help"], capture_output=True, timeout=15, check=False,
-        )
+        proc = subprocess.run(cmd, capture_output=True, timeout=15, check=False)
     except subprocess.TimeoutExpired:
         return  # It ran, it just did not exit fast. Good enough.
     except OSError as exc:
@@ -839,6 +814,275 @@ def _smoke_test(path: Path) -> None:
             proc.returncode, text.strip()[:200],
         )
         raise GowaUpdateError(_GENERIC_UPDATE_FAILURE)
+
+
+# ── Plan B: GOWA binary from the official Docker image on GHCR ─────────
+
+
+def _ghcr_request(url: str, token: str = "", accept: str = "") -> urllib.request.Request:
+    req = urllib.request.Request(url, headers={"User-Agent": _UA})
+    if accept:
+        req.add_header("Accept", accept)
+    if token:
+        # Unredirected: blobs answer 307 to pkg-containers.githubusercontent.com,
+        # and a header passed the normal way IS re-sent to the redirect host
+        # (checked on Python 3.11 and 3.12). The token is for ghcr.io only.
+        req.add_unredirected_header("Authorization", f"Bearer {token}")
+    return req
+
+
+def _ghcr_json(url: str, token: str = "", accept: str = "") -> tuple[dict, str]:
+    with urllib.request.urlopen(_ghcr_request(url, token, accept),
+                                timeout=_API_TIMEOUT_SEC) as resp:
+        raw = resp.read(_GHCR_MAX_JSON_BYTES + 1)
+        content_type = resp.headers.get("Content-Type", "")
+    if len(raw) > _GHCR_MAX_JSON_BYTES:
+        raise ValueError("registry response too large")
+    data = json.loads(raw.decode("utf-8"))
+    if not isinstance(data, dict):
+        raise ValueError("registry response is not an object")
+    return data, content_type
+
+
+def _ghcr_platform_manifest(base: str, version: str, token: str) -> dict:
+    """Image manifest (the layer list) of the linux/amd64 image of tag ``v<version>``."""
+    repo_url = f"{base}/v2/{GOWA_GHCR_REPO}"
+    index, content_type = _ghcr_json(
+        f"{repo_url}/manifests/v{version}", token,
+        _OCI_INDEX_ACCEPT + ", " + _OCI_MANIFEST_ACCEPT,
+    )
+    media_type = str(index.get("mediaType") or content_type)
+    if "index" not in media_type and "manifest.list" not in media_type:
+        return index  # single-platform image: already the manifest
+    digest = ""
+    for entry in index.get("manifests") or []:
+        if not isinstance(entry, dict):
+            continue
+        plat = entry.get("platform") or {}
+        # The index also lists "unknown/unknown" attestation manifests.
+        if plat.get("os") == "linux" and plat.get("architecture") == "amd64":
+            digest = str(entry.get("digest") or "")
+            break
+    if not _DIGEST_RE.match(digest):
+        raise ValueError("image index has no linux/amd64 manifest")
+    manifest, _ = _ghcr_json(f"{repo_url}/manifests/{digest}", token, _OCI_MANIFEST_ACCEPT)
+    return manifest
+
+
+def _ghcr_download_layer(base: str, digest: str, size: int, token: str, dest: Path) -> None:
+    """Stream one layer to ``dest``; refuse it unless its sha256 is the digest."""
+    if size > _GHCR_MAX_LAYER_BYTES:
+        raise ValueError(f"layer {digest} too large ({size} bytes)")
+    expected = digest.split(":", 1)[1]
+    digest_obj = hashlib.sha256()
+    read = 0
+    req = _ghcr_request(f"{base}/v2/{GOWA_GHCR_REPO}/blobs/{digest}", token)
+    with urllib.request.urlopen(req, timeout=_DOWNLOAD_TIMEOUT_SEC) as resp, \
+            dest.open("wb") as fh:
+        while True:
+            chunk = resp.read(_CHUNK)
+            if not chunk:
+                break
+            read += len(chunk)
+            if read > _GHCR_MAX_LAYER_BYTES:
+                raise ValueError(f"layer {digest} exceeded the size limit")
+            digest_obj.update(chunk)
+            fh.write(chunk)
+    if digest_obj.hexdigest() != expected:
+        dest.unlink(missing_ok=True)
+        raise GowaUpdateError(
+            "O arquivo baixado não confere com o checksum publicado. Atualização cancelada."
+        )
+
+
+def _ghcr_extract(layer: Path, wanted: dict[str, Path], found: dict[str, str]) -> None:
+    """Copy the ``wanted`` members (exact names) out of a layer tarball.
+
+    Never ``extractall``: only regular files with these exact names are
+    written, to paths we chose. A wanted name that is a link (or anything but a
+    regular file) is refused.
+    """
+    with tarfile.open(layer, "r:*") as tf:
+        for member in tf:
+            name = member.name[2:] if member.name.startswith("./") else member.name
+            if name not in wanted or name in found:
+                continue
+            if not member.isreg():
+                raise ValueError(f"{name} in the image is not a regular file")
+            src = tf.extractfile(member)
+            if src is None:
+                raise ValueError(f"{name} in the image cannot be read")
+            digest = hashlib.sha256()
+            with src, wanted[name].open("wb") as out:
+                for chunk in iter(lambda: src.read(_CHUNK), b""):
+                    digest.update(chunk)
+                    out.write(chunk)
+            wanted[name].chmod(0o755)
+            found[name] = digest.hexdigest()
+
+
+def fetch_ghcr_binary(version: str, dest_dir: Path, on_progress=None) -> tuple[Path, Path, str]:
+    """Download GOWA ``version`` from its official Docker image on GHCR.
+
+    Returns ``(binary, loader, binary_sha256)`` written into ``dest_dir`` (must
+    allow exec: ``storages/bin/.tmp``, never ``/tmp``, which is ``noexec`` in
+    the hosting). Layers are verified against their digest and searched by
+    content, smallest first, so the ~57 MB ffmpeg layer is normally skipped.
+    Any failure raises ``GowaCpuIsaError`` (the "old processor" notice), with
+    the technical reason in the log, except a tampered layer (integrity error).
+    """
+    if not _VERSION_RE.match(version or ""):
+        raise GowaUpdateError(f"Versão inválida: {version!r}. Use o formato x.y.z.")
+    report = on_progress or _noop_progress
+    base = registry_base()
+    binary = dest_dir / "gowa.ghcr"
+    loader = dest_dir / gowa_binary.LOADER_NAME
+    layer_path = dest_dir / "layer.tar"
+    wanted = {_GHCR_BINARY_MEMBER: binary, _GHCR_LOADER_MEMBER: loader}
+    found: dict[str, str] = {}
+    try:
+        token_data, _ = _ghcr_json(
+            f"{base}/token?scope=repository:{GOWA_GHCR_REPO}:pull")
+        token = str(token_data.get("token") or "")
+        manifest = _ghcr_platform_manifest(base, version, token)
+        layers = [
+            (str(layer.get("digest") or ""), int(layer.get("size") or 0))
+            for layer in manifest.get("layers") or [] if isinstance(layer, dict)
+        ]
+        if not layers or any(not _DIGEST_RE.match(d) for d, _ in layers):
+            raise ValueError("unexpected layer list in the image manifest")
+        total = sum(size for _, size in layers) or 1
+        done = 0
+        for digest, size in sorted(layers, key=lambda item: item[1]):
+            if len(found) == len(wanted):
+                break
+            _ghcr_download_layer(base, digest, size, token, layer_path)
+            done += size
+            report("downloading", min(int(done * 100 / total), 99), version)
+            _ghcr_extract(layer_path, wanted, found)
+            layer_path.unlink(missing_ok=True)
+        missing = sorted(set(wanted) - set(found))
+        if missing:
+            raise ValueError(f"image has no {', '.join(missing)}")
+    except GowaUpdateError:
+        layer_path.unlink(missing_ok=True)
+        raise
+    except (urllib.error.URLError, urllib.error.HTTPError, TimeoutError, OSError,
+            ValueError, tarfile.TarError, json.JSONDecodeError, KeyError, TypeError) as exc:
+        layer_path.unlink(missing_ok=True)
+        logger.error("GOWA %s from GHCR (%s) unavailable: %s", version, base, exc)
+        raise GowaCpuIsaError() from exc
+    logger.info("GOWA %s downloaded from GHCR (binary sha256 %s).",
+                version, found[_GHCR_BINARY_MEMBER][:12])
+    return binary, loader, found[_GHCR_BINARY_MEMBER]
+
+
+def _ghcr_supported_here() -> bool:
+    return detect_platform() == ("linux", "amd64")
+
+
+def _ghcr_asset(version: str) -> str:
+    """What ``gowa_meta.json`` records as the source of a GHCR install."""
+    return f"ghcr.io/{GOWA_GHCR_REPO}:v{version}"
+
+
+def _stage_ghcr(version: str, tmp_root: Path, report=None) -> tuple[Path, Path, str]:
+    """Download the GHCR build into ``tmp_root`` and prove it runs here (through its loader)."""
+    staged, loader, sha = fetch_ghcr_binary(version, tmp_root, report)
+    (report or _noop_progress)("verifying", 100, version)
+    _smoke_test(staged, loader)
+    logger.info("GHCR GOWA %s passed the smoke test.", version)
+    return staged, loader, sha
+
+
+def _install_loader(staged_loader: Path) -> None:
+    """Put the musl loader in ``storages/bin`` (same file for every version)."""
+    target = gowa_binary.loader_path()
+    if target.is_file() and _sha256(target) == _sha256(staged_loader):
+        staged_loader.unlink(missing_ok=True)
+        return
+    _replace_with_retry(staged_loader, target)
+    target.chmod(0o755)
+
+
+def _swap_in(staged: Path, staged_loader: Path | None, meta: dict) -> None:
+    """Atomically make ``staged`` the managed binary (old one -> ``.bak``) and record ``meta``.
+
+    The loader is installed first and is never moved to ``.bak``: it is the
+    same file for every version, so a rollback to a GHCR build still finds it.
+    """
+    if staged_loader is not None:
+        _install_loader(staged_loader)
+    managed = gowa_binary.managed_binary_path()
+    backup = gowa_binary.backup_binary_path()
+    if managed.exists():
+        backup.unlink(missing_ok=True)
+        _replace_with_retry(managed, backup)
+    _replace_with_retry(staged, managed)
+    managed.chmod(0o755)
+    _clear_quarantine(managed)
+    gowa_binary.write_meta(meta)
+
+
+def repair_at_boot(binary: Path) -> bool:
+    """Make sure the GOWA about to start can run on this CPU (called by the manager).
+
+    Only on Linux amd64, the only platform with a plan B. ``binary`` passes
+    its ``--help`` -> ``False`` (start it). It fails because the CPU is too old
+    -> install the GHCR build of the same version into ``storages/bin`` with the
+    button's swap routine and return ``True`` (the caller re-resolves the
+    binary). No plan B possible (unknown version, no network, image changed...)
+    -> ``GowaCpuIsaError``. Any other smoke-test problem -> ``False``: start as
+    before and let the process tell. Skipped while an install/rollback holds
+    ``_UPDATE_LOCK`` (it already tested what it starts) and for a binary
+    pinned by ``WHATSBOT_GOWA_BINARY``.
+    """
+    if not _ghcr_supported_here() or os.environ.get(gowa_binary.ENV_BINARY_OVERRIDE, "").strip():
+        return False
+    if not _UPDATE_LOCK.acquire(blocking=False):
+        return False
+    tmp_root = None
+    try:
+        prefix = gowa_binary.launch_prefix(binary)
+        try:
+            _smoke_test(binary, Path(prefix[0]) if prefix else None)
+        except GowaCpuIsaError:
+            pass
+        except GowaUpdateError as exc:
+            logger.warning("GOWA boot check inconclusive (%s); starting it anyway.", exc)
+            return False
+        else:
+            return False
+
+        _, source, version = gowa_binary.resolve_binary()
+        if not _VERSION_RE.match(version or ""):
+            logger.error("GOWA in %s needs a newer CPU and its version is unknown: "
+                         "no GHCR tag to download.", binary)
+            raise GowaCpuIsaError()
+        logger.warning("GOWA %s (%s) needs a newer CPU; fetching the GHCR build at boot.",
+                       version, source)
+        tmp_root = gowa_binary.tmp_dir(create=True)
+        staged, staged_loader, sha = _stage_ghcr(version, tmp_root)
+        _swap_in(staged, staged_loader, {
+            "version": version,
+            "installed_at": time.time(),
+            "asset": _ghcr_asset(version),
+            "sha256": sha,
+            "checksum": "verified",
+            "flavor": "ghcr",
+            "supported": is_supported(version),
+            "previous_version": version,
+            "previous_source": source,
+            "session_backup": "",
+            "installed_by": "boot",
+        })
+        logger.warning("GOWA %s from GHCR installed in %s at boot.", version,
+                       gowa_binary.managed_dir())
+        return True
+    finally:
+        if tmp_root is not None:
+            shutil.rmtree(tmp_root, ignore_errors=True)
+        _UPDATE_LOCK.release()
 
 
 def _replace_with_retry(src: Path, dest: Path, attempts: int = 10) -> None:
@@ -1036,52 +1280,20 @@ def install(version: str, *, manager, client, on_progress=None,
         staged.chmod(0o755)
         _clear_quarantine(staged)
         flavor = "official"
+        staged_loader = None
         try:
             _smoke_test(staged)
         except GowaCpuIsaError:
-            base = compat_base_url()
-            # Plan B only in the hosting (env set) and only on Linux amd64.
-            # Everyone else keeps the current version and sees the CPU notice.
-            if (os_, arch) != ("linux", "amd64") or not base:
+            # Plan B only on Linux amd64. Everyone else keeps the current
+            # version and sees the CPU notice; GHCR is never queried.
+            if not _ghcr_supported_here():
                 raise
-            # The URL is built from the regex-validated version only (no client input).
-            logger.warning("Official GOWA %s needs a newer CPU; trying the compat build.",
+            logger.warning("Official GOWA %s needs a newer CPU; trying the GHCR image.",
                            version)
-            asset = f"whatsapp_{version}_linux_amd64_compat.zip"
-            zip_path = tmp_root / asset
             report("downloading", 0, version)
             _set_state("running", "downloading", 0, version)
-            try:
-                _download(f"{base}/{asset}", zip_path, report, version)
-            except GowaUpdateError as exc:
-                if _is_missing_remote(exc.__cause__):
-                    # Not compiled yet: the server's timer publishes it soon.
-                    logger.warning("Compat GOWA %s is not published yet: %s", version, exc)
-                    raise GowaCompatPendingError() from exc
-                logger.error("Compat GOWA %s unavailable: %s", version, exc)
-                raise GowaUpdateError(_GENERIC_UPDATE_FAILURE) from exc
-            report("verifying", 100, version)
-            _set_state("running", "verifying", 100, version)
-            expected = _fetch_compat_checksums(base).get(asset, "")
-            if not expected:
-                # checksums.txt is written LAST when publishing, so a zip without
-                # its line is a build still being published.
-                logger.warning("Compat GOWA %s has no published checksum yet.", version)
-                raise GowaCompatPendingError()
-            actual = _sha256(zip_path)
-            if actual != expected:
-                logger.error("Compat GOWA %s checksum %s (expected %r); refusing.",
-                             version, actual, expected)
-                raise GowaUpdateError(
-                    "O arquivo baixado não confere com o checksum publicado. "
-                    "Atualização cancelada."
-                )
-            staged.unlink(missing_ok=True)
-            _extract_binary(zip_path, inner_binary_name(os_, arch), staged)
-            staged.chmod(0o755)
-            _smoke_test(staged)
-            flavor = "compat"
-            logger.info("Compat GOWA %s passed the smoke test.", version)
+            staged, staged_loader, actual = _stage_ghcr(version, tmp_root, report)
+            asset, expected, flavor = _ghcr_asset(version), actual, "ghcr"
 
         # 4. Snapshot the WhatsApp session before a major boundary.
         if _is_major_jump(previous_version, version):
@@ -1092,17 +1304,7 @@ def install(version: str, *, manager, client, on_progress=None,
         _set_state("running", "installing", 100, version)
         manager.stop()
 
-        managed = gowa_binary.managed_binary_path()
-        backup = gowa_binary.backup_binary_path()
-        had_managed = managed.exists()
-        if had_managed:
-            backup.unlink(missing_ok=True)
-            _replace_with_retry(managed, backup)
-        _replace_with_retry(staged, managed)
-        managed.chmod(0o755)
-        _clear_quarantine(managed)
-
-        gowa_binary.write_meta({
+        _swap_in(staged, staged_loader, {
             "version": version,
             "installed_at": time.time(),
             "asset": asset,
