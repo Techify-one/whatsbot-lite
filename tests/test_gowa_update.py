@@ -694,6 +694,8 @@ class FakeRegistry:
         self.images: dict[str, list[bytes]] = {}
         self.blobs: dict[str, bytes] = {}
         self.status: int | None = None   # força um código (404/429) em tudo
+        self.fail_first: dict[str, int] = {}   # {trecho do caminho: nº de respostas 503 antes de funcionar}
+        self.stall = False                      # aceita a conexão e nunca responde (timeout de leitura)
         self.requests: list[str] = []
         self.auth_seen_on_redirect: list = []
         self.tamper: set[str] = set()
@@ -728,6 +730,16 @@ class FakeRegistry:
 
             def do_GET(self):
                 reg.requests.append(self.path)
+                for part, left in list(reg.fail_first.items()):
+                    if part in self.path and left > 0:
+                        reg.fail_first[part] = left - 1
+                        self.send_response(503)
+                        self.end_headers()
+                        return
+                if reg.stall:
+                    import time as _t
+                    _t.sleep(3)
+                    return
                 if reg.status:
                     self.send_response(reg.status)
                     self.end_headers()
@@ -818,6 +830,9 @@ def ghcr_image(version, *, binary=True, loader=True, extra=None):
 
 
 REG = FakeRegistry()
+gowa_updater._GHCR_RETRY_WAIT_SEC = (0.05, 0.05)
+gowa_updater._GHCR_READ_TIMEOUT_SEC = 1
+gowa_updater._GHCR_JSON_TIMEOUT_SEC = 1
 REG_ENV = {"WHATSBOT_GOWA_REGISTRY": REG.url}
 
 
@@ -903,6 +918,18 @@ if (OS_, ARCH) == ("linux", "amd64"):
 
         before = gowa_binary.managed_binary_path().read_bytes()
 
+        def _net_fails(version, title):
+            """Falha de rede: mensagem própria, SEM aviso de processador antigo, nada trocado."""
+            patcher, _ = _first_fails()
+            with patcher:
+                r = gowa_updater.install(version, manager=MagicMock(), client=client)
+            check(f"{title} -> aviso de rede (registry_unavailable), nada trocado",
+                  r["ok"] is False and r["rolled_back"] is False
+                  and r.get("error_code") == "registry_unavailable", str(r))
+            check(f"{title} -> binário atual intacto",
+                  gowa_binary.managed_binary_path().read_bytes() == before)
+            return r
+
         def _fails_keeps(version, title):
             patcher, _ = _first_fails()
             with patcher:
@@ -938,9 +965,38 @@ if (OS_, ARCH) == ("linux", "amd64"):
         # --- tag inexistente, limite --------------------------------
         publish("9.14.0")
         _fails_keeps("9.14.0", "tag inexistente no GHCR (404)")
+        # --- falhas de REDE: nunca viram "processador antigo" -------
         REG.status = 429
-        _fails_keeps("9.9.0", "limite do registry (429)")
+        REG.requests.clear()
+        r = _net_fails("9.9.0", "limite do registry (429)")
+        check("429: tentou 3 vezes antes de desistir", REG.requests.count("/token?scope=repository:aldinokemal/go-whatsapp-web-multidevice:pull") == 3, str(REG.requests))
         REG.status = None
+        REG.stall = True
+        _net_fails("9.9.0", "registry que não responde (timeout)")
+        REG.stall = False
+        _saved = gowa_updater.registry_base
+        gowa_updater.registry_base = lambda: "http://127.0.0.1:9"
+        try:
+            _net_fails("9.9.0", "registry inacessível (conexão recusada)")
+        finally:
+            gowa_updater.registry_base = _saved
+        check("falha de rede não grava a marca de CPU antiga (o código da resposta é outro)",
+              r.get("error_code") == "registry_unavailable"
+              and r["message"] == gowa_updater.REGISTRY_UNAVAILABLE_MESSAGE
+              and "processador" not in r["message"], str(r))
+
+        # --- uma falha passageira é recuperada pelas tentativas -----
+        REG.fail_first = {"/blobs/": 2}
+        REG.requests.clear()
+        patcher, _ = _first_fails()
+        with patcher:
+            r = gowa_updater.install("9.9.0", manager=MagicMock(), client=client)
+        REG.fail_first = {}
+        check("503 passageiro nas camadas: as tentativas recuperam e a instalação conclui",
+              r["ok"] is True and REG.requests.count(REG.requests[0]) >= 1, str(r))
+        check("503 passageiro: refez o download (mais de 3 blobs pedidos)",
+              len(REG.blob_requests()) > 3, str(REG.blob_requests()))
+        before = gowa_binary.managed_binary_path().read_bytes()
 
         # --- membros perigosos --------------------------------------
         for title, layer in [
@@ -1097,9 +1153,26 @@ if (OS_, ARCH) == ("linux", "amd64"):
             except gowa_updater.GowaCpuIsaError as exc:
                 raised = exc
         REG.status = None
-        check("boot sem GHCR: GowaCpuIsaError (aviso de processador antigo)", raised is not None)
+        check("boot com tag inexistente (404): GowaCpuIsaError (sem plano B)", raised is not None)
         check("boot sem GHCR: nada iniciado, nada instalado",
               mgr4._process is None and not gowa_binary.managed_binary_path().exists())
+
+        # rede fora do ar no boot: NÃO é processador antigo; nada iniciado; próximo start tenta de novo
+        REG.status = 503
+        mgr6 = gowa_manager_mod.GOWAManager(port=3999, data_dir=Path(tempfile.mkdtemp()))
+        patcher, _ = _boot_run()
+        raised = None
+        with patcher:
+            try:
+                _boot_start(mgr6)
+            except gowa_updater.GowaUpdateError as exc:
+                raised = exc
+        REG.status = None
+        check("boot sem rede: GowaRegistryUnavailableError (NÃO é CPU antiga)",
+              isinstance(raised, gowa_updater.GowaRegistryUnavailableError)
+              and not isinstance(raised, gowa_updater.GowaCpuIsaError), repr(raised))
+        check("boot sem rede: nada iniciado e o binário não é dado como checado",
+              mgr6._process is None and not mgr6._cpu_checked)
 
         # versão desconhecida: não há tag para baixar
         sidecar = gowa_binary.bundled_version_file_path()
