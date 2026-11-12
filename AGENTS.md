@@ -475,6 +475,16 @@ O mesmo erro sai quando o GOWA novo **sobe e morre** por instrução ilegal (rol
   com o `_UPDATE_LOCK` ocupado nem com `WHATSBOT_GOWA_BINARY`. Versão desconhecida, sem rede, 404/429 ou
   imagem mudada → `GowaCpuIsaError`: nada é iniciado (sem loop de restart) e o `start_gowa_task` grava a
   marca `gowa_cpu_unsupported` e mostra o aviso.
+- **Falha de rede NÃO é processador antigo** (`GowaRegistryUnavailableError`, `error_code: "registry_unavailable"`,
+  mensagem "…a conexão com o servidor de download falhou ou está lenta… Tente de novo em alguns minutos.").
+  Timeout, conexão recusada, 429 e 5xx são tentados 3 vezes (espera de 5 s e 15 s) e, persistindo, viram esse
+  aviso: **não** gravam a marca `gowa_cpu_unsupported` (o painel continua oferecendo atualizações) e o boot
+  não marca o binário como checado, então o próximo start tenta de novo. Só uma resposta **inútil** do
+  registry (tag 404, imagem sem `app/whatsapp` ou sem o carregador, tar inválido) vira `GowaCpuIsaError`.
+  Erro de disco/permissão em `storages/bin/.tmp` vira a mensagem genérica. **Os timeouts de leitura são por
+  leitura, não por download:** a hospedagem limita cada cliente a ~1 Mbit/s depois da rajada (uma camada de
+  13 MB leva ~100 s, com pausas de 10+ s entre blocos), então `_GHCR_READ_TIMEOUT_SEC = 180` e
+  `_GHCR_JSON_TIMEOUT_SEC = 60`. Com 15 s o `jp` estourou o tempo e levou o aviso errado de CPU (v0.2.22).
 - **`WHATSBOT_GOWA_REGISTRY`**: override do registry (só `http(s)`), para os testes offline e um espelho
   futuro. **Não é exigido de ninguém.**
 - **Sem plano B** (Windows, Mac, Linux arm64, ou o GHCR falhou): a versão atual é mantida e a resposta traz

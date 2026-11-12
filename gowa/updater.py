@@ -13,12 +13,14 @@ callback so the caller decides how to surface it (WebSocket, log, nothing).
 from __future__ import annotations
 
 import hashlib
+import http.client
 import json
 import logging
 import os
 import platform
 import re
 import shutil
+import ssl
 import subprocess
 import sys
 import tarfile
@@ -67,6 +69,13 @@ _OCI_MANIFEST_ACCEPT = (
     "application/vnd.docker.distribution.manifest.v2+json"
 )
 _DIGEST_RE = re.compile(r"^sha256:[0-9a-f]{64}$")
+# The hosting caps each client at ~1 Mbit/s once its burst is spent: a 13 MB layer
+# then takes ~100 s with pauses of 10+ s between chunks. Read timeouts are PER READ
+# (not per download), so they only have to outlast those pauses.
+_GHCR_JSON_TIMEOUT_SEC = 60
+_GHCR_READ_TIMEOUT_SEC = 180
+_GHCR_ATTEMPTS = 3
+_GHCR_RETRY_WAIT_SEC = (5, 15)   # before attempt 2 and 3
 
 
 def registry_base() -> str:
@@ -111,6 +120,15 @@ CPU_UNSUPPORTED_MESSAGE = (
     "Este computador tem um processador antigo demais para esta versão do GOWA "
     "(motor do WhatsApp). A versão atual foi mantida e continua funcionando. "
     "Se precisar de ajuda entre em contato com a equipe Techify."
+)
+
+# The GHCR download failed for a network reason (timeout, no connection, 5xx, 429):
+# says nothing about the CPU, so it must never raise the "old processor" notice.
+REGISTRY_UNAVAILABLE_CODE = "registry_unavailable"
+REGISTRY_UNAVAILABLE_MESSAGE = (
+    "Não foi possível baixar o GOWA agora: a conexão com o servidor de download falhou "
+    "ou está lenta. A versão atual foi mantida e continua funcionando. "
+    "Tente de novo em alguns minutos."
 )
 
 # Last official GOWA that runs on CPUs without AVX2 (checked by running the Linux
@@ -198,6 +216,15 @@ class GowaCpuIsaError(GowaUpdateError):
     error_code = CPU_UNSUPPORTED_CODE
 
     def __init__(self, message: str = CPU_UNSUPPORTED_MESSAGE):
+        super().__init__(message)
+
+
+class GowaRegistryUnavailableError(GowaUpdateError):
+    """The GHCR download failed because of the network, not because of the CPU."""
+
+    error_code = REGISTRY_UNAVAILABLE_CODE
+
+    def __init__(self, message: str = REGISTRY_UNAVAILABLE_MESSAGE):
         super().__init__(message)
 
 
@@ -819,6 +846,30 @@ def _smoke_test(path: Path, loader: Path | None = None) -> None:
 # ── Plan B: GOWA binary from the official Docker image on GHCR ─────────
 
 
+def _is_transient_network_error(exc: BaseException) -> bool:
+    """True for failures of the connection itself (worth retrying, and unrelated to the CPU)."""
+    if isinstance(exc, urllib.error.HTTPError):
+        return exc.code in (408, 425, 429) or exc.code >= 500
+    return isinstance(exc, (
+        urllib.error.URLError, TimeoutError, ConnectionError, ssl.SSLError,
+        http.client.HTTPException,
+    ))
+
+
+def _ghcr_retry(what: str, func):
+    """Run ``func`` up to ``_GHCR_ATTEMPTS`` times while it fails for network reasons."""
+    for attempt in range(1, _GHCR_ATTEMPTS + 1):
+        try:
+            return func()
+        except Exception as exc:
+            if attempt == _GHCR_ATTEMPTS or not _is_transient_network_error(exc):
+                raise
+            wait = _GHCR_RETRY_WAIT_SEC[min(attempt - 1, len(_GHCR_RETRY_WAIT_SEC) - 1)]
+            logger.warning("GHCR %s failed (%s); attempt %d/%d in %ss.",
+                           what, exc, attempt + 1, _GHCR_ATTEMPTS, wait)
+            time.sleep(wait)
+
+
 def _ghcr_request(url: str, token: str = "", accept: str = "") -> urllib.request.Request:
     req = urllib.request.Request(url, headers={"User-Agent": _UA})
     if accept:
@@ -833,7 +884,7 @@ def _ghcr_request(url: str, token: str = "", accept: str = "") -> urllib.request
 
 def _ghcr_json(url: str, token: str = "", accept: str = "") -> tuple[dict, str]:
     with urllib.request.urlopen(_ghcr_request(url, token, accept),
-                                timeout=_API_TIMEOUT_SEC) as resp:
+                                timeout=_GHCR_JSON_TIMEOUT_SEC) as resp:
         raw = resp.read(_GHCR_MAX_JSON_BYTES + 1)
         content_type = resp.headers.get("Content-Type", "")
     if len(raw) > _GHCR_MAX_JSON_BYTES:
@@ -877,7 +928,7 @@ def _ghcr_download_layer(base: str, digest: str, size: int, token: str, dest: Pa
     digest_obj = hashlib.sha256()
     read = 0
     req = _ghcr_request(f"{base}/v2/{GOWA_GHCR_REPO}/blobs/{digest}", token)
-    with urllib.request.urlopen(req, timeout=_DOWNLOAD_TIMEOUT_SEC) as resp, \
+    with urllib.request.urlopen(req, timeout=_GHCR_READ_TIMEOUT_SEC) as resp, \
             dest.open("wb") as fh:
         while True:
             chunk = resp.read(_CHUNK)
@@ -928,8 +979,12 @@ def fetch_ghcr_binary(version: str, dest_dir: Path, on_progress=None) -> tuple[P
     allow exec: ``storages/bin/.tmp``, never ``/tmp``, which is ``noexec`` in
     the hosting). Layers are verified against their digest and searched by
     content, smallest first, so the ~57 MB ffmpeg layer is normally skipped.
-    Any failure raises ``GowaCpuIsaError`` (the "old processor" notice), with
-    the technical reason in the log, except a tampered layer (integrity error).
+    Network failures are retried and, if they persist, raise
+    ``GowaRegistryUnavailableError`` (nothing to do with the CPU); a local disk
+    problem raises the generic failure; only an unusable answer from the
+    registry (tag missing, image without the binary...) raises
+    ``GowaCpuIsaError`` (the "old processor" notice). A tampered layer is an
+    integrity error. The technical reason always goes to the log.
     """
     if not _VERSION_RE.match(version or ""):
         raise GowaUpdateError(f"Versão inválida: {version!r}. Use o formato x.y.z.")
@@ -941,10 +996,11 @@ def fetch_ghcr_binary(version: str, dest_dir: Path, on_progress=None) -> tuple[P
     wanted = {_GHCR_BINARY_MEMBER: binary, _GHCR_LOADER_MEMBER: loader}
     found: dict[str, str] = {}
     try:
-        token_data, _ = _ghcr_json(
-            f"{base}/token?scope=repository:{GOWA_GHCR_REPO}:pull")
+        token_data, _ = _ghcr_retry("token", lambda: _ghcr_json(
+            f"{base}/token?scope=repository:{GOWA_GHCR_REPO}:pull"))
         token = str(token_data.get("token") or "")
-        manifest = _ghcr_platform_manifest(base, version, token)
+        manifest = _ghcr_retry(
+            "manifest", lambda: _ghcr_platform_manifest(base, version, token))
         layers = [
             (str(layer.get("digest") or ""), int(layer.get("size") or 0))
             for layer in manifest.get("layers") or [] if isinstance(layer, dict)
@@ -956,7 +1012,8 @@ def fetch_ghcr_binary(version: str, dest_dir: Path, on_progress=None) -> tuple[P
         for digest, size in sorted(layers, key=lambda item: item[1]):
             if len(found) == len(wanted):
                 break
-            _ghcr_download_layer(base, digest, size, token, layer_path)
+            _ghcr_retry(f"layer {digest[7:19]}", lambda d=digest, n=size:
+                        _ghcr_download_layer(base, d, n, token, layer_path))
             done += size
             report("downloading", min(int(done * 100 / total), 99), version)
             _ghcr_extract(layer_path, wanted, found)
@@ -968,8 +1025,17 @@ def fetch_ghcr_binary(version: str, dest_dir: Path, on_progress=None) -> tuple[P
         layer_path.unlink(missing_ok=True)
         raise
     except (urllib.error.URLError, urllib.error.HTTPError, TimeoutError, OSError,
-            ValueError, tarfile.TarError, json.JSONDecodeError, KeyError, TypeError) as exc:
+            http.client.HTTPException, ValueError, tarfile.TarError,
+            json.JSONDecodeError, KeyError, TypeError) as exc:
         layer_path.unlink(missing_ok=True)
+        if _is_transient_network_error(exc):
+            logger.error("GOWA %s from GHCR (%s) failed on the network: %s", version, base, exc)
+            raise GowaRegistryUnavailableError() from exc
+        if isinstance(exc, OSError) and not isinstance(exc, urllib.error.URLError):
+            # (HTTPError/URLError are OSErrors too: a 404 is the registry answering, not the disk.)
+            # Disk full, permissions on storages/bin/.tmp...: nothing to do with the CPU.
+            logger.error("GOWA %s from GHCR: local file error: %s", version, exc)
+            raise GowaUpdateError(_GENERIC_UPDATE_FAILURE) from exc
         logger.error("GOWA %s from GHCR (%s) unavailable: %s", version, base, exc)
         raise GowaCpuIsaError() from exc
     logger.info("GOWA %s downloaded from GHCR (binary sha256 %s).",

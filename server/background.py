@@ -63,6 +63,13 @@ async def start_gowa_task(deps):
         except Exception as exc:
             logger.warning("Could not record the CPU notice: %s", exc)
         await ws_manager.broadcast("gowa_status", {"message": state.notification})
+    except gowa_updater.GowaUpdateError as exc:
+        # Same repair, but the download failed for a reason that is NOT the CPU
+        # (network...): say so and do not record the "old processor" mark. The next
+        # start tries again.
+        state.notification = str(exc)
+        logger.error("GOWA could not be repaired at boot: %s", exc)
+        await ws_manager.broadcast("gowa_status", {"message": state.notification})
     except Exception as e:
         state.notification = "GOWA indisponível — modo sandbox disponível"
         logger.info("GOWA failed to start (%s), sandbox-only mode.", e)

@@ -1260,6 +1260,23 @@ check("falha genérica -> NÃO marca a CPU como antiga",
 check("o código 'compat_pending' (pasta compat) não existe mais",
       not hasattr(_gowa_updater, "COMPAT_PENDING_CODE"))
 
+# Falha de REDE ao baixar do GHCR: aviso próprio e NUNCA a marca de CPU antiga.
+_gowa_updater.install = lambda version, **_k: {
+    "ok": False, "version": version, "previous_version": "", "rolled_back": False,
+    "message": _gowa_updater.REGISTRY_UNAVAILABLE_MESSAGE,
+    "error_code": _gowa_updater.REGISTRY_UNAVAILABLE_CODE,
+}
+try:
+    r = client.post("/api/gowa/update", json={"version": "9.9.0"})
+finally:
+    _gowa_updater.install = _orig_install
+check("rede/GHCR fora -> 400 com error_code=registry_unavailable",
+      r.status_code == 400 and r.json().get("error_code") == "registry_unavailable", str(r.json()))
+check("rede/GHCR fora -> mensagem de conexão, sem falar de processador",
+      "conexão" in r.json().get("error", "") and "processador" not in r.json().get("error", ""), str(r.json()))
+check("rede/GHCR fora -> NÃO marca a CPU como antiga",
+      not settings.get("gowa_cpu_unsupported"))
+
 # "Testar de novo" clears the mark.
 settings["gowa_cpu_unsupported"] = "9.9.0"
 r = client.post("/api/gowa/cpu-retry")
