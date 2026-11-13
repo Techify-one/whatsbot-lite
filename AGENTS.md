@@ -74,6 +74,15 @@ server/ai_reactivation.py → religar a IA automaticamente (regra pura + `run_on
 server/media_policy.py → política de download automático de mídia (matriz tipo × individual/grupo, guarda de caminho)
 server/file_manager.py → listagem e remoção segura de statics/media e statics/operator (allowlist, ids opacos)
 server/routes/files.py → endpoints /api/files/* da tela Arquivos
+portability/         → Importar/Exportar entre instalações (pacote .zip próprio, ver [docs/IMPORT_EXPORT.md](docs/IMPORT_EXPORT.md))
+  format.py          → pacote: NDJSON + manifest + checksums, zip-slip/zip-bomb, `product: "whatsbot-lite"`
+  crypto.py          → segredos cifrados (scrypt + AES-256-GCM); `cryptography` é importada sob demanda
+  registry.py        → escopos, estratégias e a ALLOWLIST de config (nega por padrão, nos dois sentidos)
+  jobs.py            → jobs em tabela, SQL portável SQLite/Postgres; senha do pacote só em memória
+  handlers.py        → export, verificação (dry-run) e import; o dry-run e o import usam o MESMO `apply`
+  entities*.py       → config, tags, contatos, mensagens; media.py / avatars.py → arquivos e fotos
+  warnings.py        → lista ÚNICA dos códigos de aviso (a frase vive só em `portabilityLogic.js`)
+server/routes/portability.py → endpoints /api/portability/* (exigem senha de painel)
 bin/gowa.exe         → binário GOWA pré-compilado do Windows (não editar; atualizações vão pra storages/bin/)
 bin/gowa.exe.version → versão do bin/gowa.exe, rastreada no git e trocada junto com o exe (ver "Versão instalada")
 storages/bin/        → binário GOWA atualizado pelo painel (writable, persiste em Docker/Coolify)
@@ -208,6 +217,8 @@ Para Docker: setar `DATABASE_URL` no `.env` antes de subir o container — o arq
 | `plugin_migrations` | Versões de SQL migrations já aplicadas, por plugin |
 | `plugin_<id>_*` | Tabelas criadas por plugins via suas migrations (prefixo obrigatório) |
 | `tool_overrides` | Override por-tool (enabled, description, display_label). Row criada automaticamente para cada tool registrada (core + plugin) |
+| `portability_jobs` | Jobs de importar/exportar (estado, progresso, relatório, caminho do pacote). Efêmera: a migração SQLite → Postgres não a copia. Nunca guarda a senha do pacote |
+| `portability_job_errors` | Erros por linha de um job (entidade, linha, código, identificador mascarado), com teto. `ON DELETE CASCADE` do job |
 
 ### Configuração SQLite
 
@@ -798,6 +809,35 @@ usuário define o limite em `disk_limit_gb` pela própria tela. É só informati
 | GET | `/api/files/{id}/preview` | Serve o arquivo (`?download=true` força download) |
 | POST | `/api/files/delete` | `{ids}` → apaga, marca `media_state='removed'`, devolve `{files, bytes, failed, messages}` |
 | POST | `/api/contacts/{phone}/messages/{msg_id}/download-media` | Busca de novo no WhatsApp um arquivo descartado/removido |
+| POST | `/api/portability/exports` | Cria o job de export `{scopes, include_secrets?, password?, include_media?, media_from?, media_to?, include_avatars?}`. Todas as rotas `/api/portability/*` respondem 403 `password_required` sem senha de painel e 409 `job_busy` se já há um job |
+| POST | `/api/portability/jobs/{id}/download` | Baixa o pacote de um export concluído (POST de propósito, `no-store`) |
+| POST | `/api/portability/imports` | Upload multipart (em blocos, teto de 5 GB, 413) → job de **verificação** que não grava nada |
+| POST | `/api/portability/imports/{id}/confirm` | `{strategy, password?, overwrite_secrets?, acknowledged: true}` → job de import sobre o mesmo pacote |
+| POST | `/api/portability/imports/{id}/recalculate` | Refaz a verificação com outras estratégias |
+| POST | `/api/portability/jobs/{id}/resume` | Continua um import interrompido (pede a senha do pacote de novo) |
+| GET | `/api/portability/jobs`, `/jobs/{id}`, `/jobs/{id}/errors` | Consulta por polling; resposta é lista branca (sem `params` nem caminho) |
+| POST | `/api/portability/jobs/{id}/cancel` | Cancela o job |
+
+## Importar/Exportar (migrar entre instalações)
+
+Pacote `.zip` próprio do Lite (não é lido pelo WhatsBot Pro) gerado e lido por **Painel → Sistema → Importar / Exportar**
+(`/painel?aba=sistema#import-export`). Mecanismo, formato e o **porquê** de cada regra: [docs/IMPORT_EXPORT.md](docs/IMPORT_EXPORT.md).
+Leia antes de mexer. As regras que quebram segurança se ignoradas:
+
+- **Config por allowlist** ([portability/registry.py](portability/registry.py)): chave nova do `DEFAULT_CONFIG` precisa ser
+  classificada (exportável, secreta ou nunca), senão `tests/test_portability_registry.py` falha. Vale nos dois sentidos:
+  um pacote adulterado não grava `web_password_hash`, `installation_id` nem `ai_engine_enabled`.
+- **Exige senha de painel**: sem ela toda rota responde 403 `password_required` (o Lite só tem uma senha e, sem ela, `/api/*`
+  fica aberto). Um job por vez (409).
+- **A senha do pacote só existe em memória** e entra ANTES de o job existir na fila. Nunca em tabela, log ou resposta.
+- **Chave natural, nunca id** (telefone com variantes BR, nome da tag, `msg_id`): é o que torna reimportar idempotente.
+- **Importar não é atividade**: não lidas zeradas, nenhum evento de plugin nem `new_message`, a IA não responde.
+- **Mídia**: só `statics/media` e `statics/operator`; nome novo no destino e extensão por allowlist (`.html`/`.svg` viram
+  `.bin`, porque `/statics` é servido na origem do painel); origem revalidada na cópia.
+- **Aviso novo** = uma linha em [portability/warnings.py](portability/warnings.py) + a frase em
+  [portabilityLogic.js](web/static/js/utils/portabilityLogic.js), no mesmo commit (`tests/test_portability_warnings.py` confere).
+- **Chave de config nova ou tabela nova de conversa** muda o que viaja: atualize o registro, o guia e `agent/SYSTEM_HELP.md`.
+- `cryptography` é importada sob demanda (o self-update não roda `pip`): sem ela só os pacotes **sem segredos** funcionam.
 
 ## Fotos de perfil (avatars)
 
@@ -1208,6 +1248,8 @@ python tests/test_endpoints.py
 python tests/test_gowa_update.py   # updater do GOWA (offline: release falsa via file:// + registry GHCR falso em http.server)
 python tests/test_gowa_proxy.py    # proxy do GOWA (offline, proxies SOCKS5/HTTP falsos em socket)
 node --test tests/gowa-prompt.test.cjs  # decisão dos modais de GOWA no frontend (sem navegador)
+python -m pytest tests/test_portability_*.py  # Importar/Exportar: formato, cripto, jobs, round-trip, contatos, mídia, rotas e paridade de avisos (SQLite ou Postgres)
+node --test tests/portability-logic.test.cjs  # lógica pura da tela Importar/Exportar (sem navegador)
 python tests/test_provisioning_target.py  # par destino+frase do provisionamento + os dois seams (offline)
 python tests/test_llm_costing.py  # cache do LLM: session id, header x-session-id, estimate_cost com desconto, usage_repo (offline)
 ```

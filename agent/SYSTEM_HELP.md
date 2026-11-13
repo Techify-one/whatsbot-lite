@@ -65,7 +65,7 @@ O painel separa as configurações em três abas:
 
 - **Agente** reúne ativação da IA, instruções, contexto e comportamento das respostas. [Abrir aba Agente]({{base_url}}/painel?aba=agente)
 - **Modelos e mídia** reúne chave de API, modelos, leitura de áudios, imagens e documentos e o download automático de arquivos. [Abrir aba Modelos e mídia]({{base_url}}/painel?aba=modelos-midia)
-- **Sistema** reúne acesso, atualizações, banco de dados e o motor do WhatsApp. [Abrir aba Sistema]({{base_url}}/painel?aba=sistema)
+- **Sistema** reúne acesso, atualizações, importar e exportar, banco de dados e o motor do WhatsApp. [Abrir aba Sistema]({{base_url}}/painel?aba=sistema)
 
 Cada opção abaixo tem um link direto. Ao abrir esse link, o WhatsBot-Lite seleciona a aba certa e leva a pessoa até a configuração.
 
@@ -304,6 +304,29 @@ No Chat, projetos podem ser renomeados, removidos da lista e arrastados para mud
 Em **Painel → Sistema → Avançado**, use **Senha do painel**. Sem uma senha configurada, qualquer pessoa que alcançar o endereço do WhatsBot-Lite poderá abrir o painel.
 
 [Abrir senha do painel]({{base_url}}/painel?aba=sistema#password)
+
+### Levar as configurações e as conversas para outra instalação (importar e exportar)
+
+Em **Painel → Sistema → Importar / Exportar**, gere um pacote (.zip) com o que quiser levar e importe-o em outra instalação do WhatsBot-Lite. Serve para trocar de computador, mudar para um servidor ou fazer uma cópia. O pacote só é lido pelo WhatsBot-Lite (não vale para o WhatsBot Pro nem para outros programas).
+
+Antes de tudo, defina a **senha do painel**: o pacote leva conversas e a chave de API, então a tela só libera importar e exportar com senha.
+
+Para **exportar**:
+
+1. Marque o que levar: **Configurações do sistema**, **Tags** e/ou **Contatos e conversas** (contatos, observações e todo o histórico de mensagens).
+2. Se marcar conversas, escolha se leva os **arquivos de mídia** (deixa o pacote bem maior; dá para limitar por período) e as **fotos de perfil** (normalmente desnecessário, o WhatsBot baixa de novo sozinho).
+3. Para levar a chave de API, marque **Incluir segredos** e crie uma senha do pacote (mínimo de 12 caracteres, diferente da senha do painel). Guarde essa senha: sem ela não há como recuperar a chave.
+4. Clique em **Gerar pacote**, espere terminar e clique em **Baixar pacote**. O pacote fica disponível por 24 horas.
+
+Para **importar**:
+
+1. Em **Importar**, escolha o arquivo .zip (informe a senha do pacote se ele tiver segredos) e clique em **Enviar e verificar**.
+2. Veja a **prévia**: ela mostra quantos itens seriam criados, alterados ou deixados como estão, sem gravar nada. Em **Se já existir neste servidor**, escolha o que fazer com o que já existe aqui: só adicionar o que falta, completar o que existe ou substituir pelo do pacote. Mensagens nunca são alteradas nem duplicadas. Use **Recalcular prévia** depois de mudar uma opção.
+3. Clique em **Confirmar importação**, leia o resumo do que será substituído, marque **Revisei e quero iniciar** e confirme. Não há como desfazer.
+
+Detalhes importantes: as conversas importadas entram sem notificação (não aparecem como não lidas e a IA não responde a elas). A senha do painel, a identidade da instalação, o estado do WhatsApp e o proxy não são levados; depois de importar em outro servidor, conecte o WhatsApp lá pelo QR. Se o servidor reiniciar no meio de uma importação, ela fica **Interrompida** e dá para **Continuar** de onde parou sem duplicar nada. Se algum registro der erro, use **Ver erros** na prévia ou em **Operações recentes**.
+
+[Abrir importar e exportar]({{base_url}}/painel?aba=sistema#import-export)
 
 ### Configurar ou migrar o banco de dados
 

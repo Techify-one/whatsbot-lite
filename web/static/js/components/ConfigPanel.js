@@ -5,6 +5,7 @@ import { testApiKey, checkForUpdates, performUpdate, waitForCloudUpdate, markAll
 import { ModelSelect } from './ModelSelect.js';
 import { DatabaseSettings } from './DatabaseSettings.js';
 import { GowaSettings } from './GowaSettings.js';
+import { PortabilitySettings } from './portability/PortabilitySettings.js';
 
 import nav from '../utils/navigation.js';
 
@@ -54,6 +55,10 @@ const PANEL_TARGET_TABS = {
   'gowa-version': 'system',
   'gowa-proxy': 'system',
   'gowa-auto-update': 'system',
+  'import-export': 'system',
+  importar: 'system',
+  exportar: 'system',
+  portabilidade: 'system',
 };
 
 function panelTabFromLocation() {
@@ -1140,6 +1145,10 @@ export function ConfigPanel({ config, saving, onSave, onNotify }) {
 
       <div class=${activeTab === 'system' ? '' : 'hidden'}>
         <${DatabaseSettings} id="database" onNotify=${onNotify} />
+      </div>
+
+      <div class=${activeTab === 'system' ? '' : 'hidden'}>
+        <${PortabilitySettings} id="import-export" hasPassword=${!!config.has_password} />
       </div>
 
       <div class=${activeTab === 'system' ? '' : 'hidden'}>
