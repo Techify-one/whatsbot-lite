@@ -38,6 +38,9 @@ logger = logging.getLogger(__name__)
 BATCH = 200
 MAX_REPORT_WARNING_KEYS = 5
 
+#: Entidades cujas linhas descrevem CLIENTES: o erro por linha nunca cita nome nem conteúdo.
+_PERSONAL_ENTITIES = frozenset({"contacts", "messages"})
+
 #: Ordem GLOBAL de import (dependências primeiro): config e tags antes de contatos; a mensagem aponta
 #: para o contato do pacote, então vem depois dele. É um subconjunto do que o pacote traz.
 IMPORT_ORDER = ("config", "tags", "contacts", "messages")
@@ -90,8 +93,13 @@ def _row_error(env: ents.Env, name: str, row: dict, index: int) -> tuple:
     """``(code, detail)`` do erro de UMA linha — só id de origem, chave mascarada e motivo."""
     lw = env.last_warn if env.last_warn and env.last_warn[0] == name else None
     code = lw[2] if lw else "unspecified"
-    key_raw = (lw[1] if lw and lw[1] not in ("*", "?") else None) or row.get("name") \
-        or row.get("key") or row.get("phone") or row.get("id")
+    if name in _PERSONAL_ENTITIES:
+        # Contato e mensagem: o nome do cliente é dado pessoal e não vai para a tela de erros. Só o
+        # telefone (que ``_mask_key`` reduz a ``***1234``); mensagem nem o tem, e fica sem chave.
+        key_raw = row.get("phone")
+    else:
+        key_raw = (lw[1] if lw and lw[1] not in ("*", "?") else None) or row.get("name") \
+            or row.get("key") or row.get("id")
     src = row.get("id") if isinstance(row.get("id"), (int, str)) else None
     return code, {"source_id": None if src is None else str(src)[:40],
                   "key": _mask_key(key_raw), "reason": code}
