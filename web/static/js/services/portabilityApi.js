@@ -38,6 +38,18 @@ export const confirmImport = (id, body) => request('POST', `/api/portability/imp
 export const recalculateImport = (id, body) =>
   request('POST', `/api/portability/imports/${enc(id)}/recalculate`, body || {});
 export const resumeImport = (id, body) => request('POST', `/api/portability/jobs/${enc(id)}/resume`, body || {});
+export const getRestartInfo = () => request('GET', '/api/portability/restart-info');
+export const restartServer = () => request('POST', '/api/portability/restart');
+
+/** `boot_id` do servidor, ou null se ele não respondeu (fora do ar). Sem autenticação: /health é aberto. */
+export async function fetchBootId() {
+  try {
+    const res = await fetch('/health', { cache: 'no-store' });
+    if (!res.ok) return null;
+    const body = await res.json();
+    return (body && body.boot_id) || null;
+  } catch (_) { return null; }
+}
 export const getJobErrors = (id, { entity = '', limit = 100, after = null } = {}) => {
   const q = new URLSearchParams({ limit: String(limit) });
   if (entity) q.set('entity', entity);

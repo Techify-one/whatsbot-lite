@@ -11,7 +11,7 @@ const html = htm.bind(h);
 
 export function ConfirmImportModal({
   overwrites = [], options = [], codeTools = [], codePlugins = [], stale = false, busy = false,
-  onConfirm, onCancel,
+  activatePlugins = false, onActivatePlugins = null, onConfirm, onCancel,
 }) {
   const [ack, setAck] = useState(false);
   const [codeAck, setCodeAck] = useState(false);
@@ -67,6 +67,13 @@ export function ConfirmImportModal({
               <input type="checkbox" class="mt-1" checked=${codeAck} onChange=${(e) => setCodeAck(e.target.checked)} />
               <span>Entendo que o pacote traz código e quero importá-lo desligado</span>
             </label>
+            ${codePlugins.length && onActivatePlugins ? html`
+              <label class="flex items-start gap-2 text-[13px] text-red-700 mt-2 ${codeAck ? 'cursor-pointer' : 'opacity-60'}">
+                <input type="checkbox" class="mt-1" checked=${activatePlugins && codeAck} disabled=${!codeAck}
+                  onChange=${(e) => onActivatePlugins(e.target.checked)} />
+                <span>Depois de importar, <strong>ativar</strong> os plugins do pacote e reiniciar o servidor (o código deles
+                  passa a rodar). Sem isto eles ficam desligados e você ativa na aba Plugins.</span>
+              </label>` : null}
           </div>` : null}
 
         ${options.length ? html`

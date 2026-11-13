@@ -289,9 +289,20 @@ export function pendingPlugins(job) {
   return [...new Set((Array.isArray(list) ? list : []).map((t) => String(t).split('/')[0]))].sort();
 }
 
+/** Plugins que o import ligou (opt-in "ativar"): só faltam o reinício e o "Continuar". */
+export function activatedPlugins(job) {
+  const list = (job && job.report && job.report.plugins_activated) || [];
+  return (Array.isArray(list) ? list : []).map(String);
+}
+
 /** Texto da espera. Não é falha: o que já entrou fica, e os dados esperam o plugin existir. */
 export function waitingPluginsText(job) {
   const names = pendingPlugins(job);
+  const on = activatedPlugins(job);
+  if (on.length) {
+    return `A primeira etapa terminou e os plugins (${on.join(', ')}) foram ativados, mas só passam a valer depois `
+      + 'de o servidor reiniciar. O que já entrou fica e nada será duplicado.';
+  }
   const who = names.length ? ` (${names.join(', ')})` : '';
   return 'A primeira etapa terminou, mas os dados de plugin ainda não podem entrar: a tabela só existe depois de '
     + `o plugin ser ativado e o servidor reiniciar${who}. Ative o plugin na aba Plugins, aguarde o servidor `
@@ -439,7 +450,8 @@ export function codeToolRows(report) {
 }
 
 /** Corpo de POST /imports/{id}/confirm. `acknowledged` é o "Revisei" do popup: o servidor também o exige. */
-export function buildConfirmRequest({ report, strategy, password, overwriteSecrets, acceptCode = false }) {
+export function buildConfirmRequest({ report, strategy, password, overwriteSecrets, acceptCode = false,
+  activatePlugins = false }) {
   if (confirmNeedsPassword(report) && !password) {
     return { error: 'Este pacote tem segredos: informe a senha para importá-los.' };
   }
@@ -450,6 +462,8 @@ export function buildConfirmRequest({ report, strategy, password, overwriteSecre
   if (codeTotal(report) > 0) {
     if (!acceptCode) return { error: 'Este pacote traz código (ferramentas de IA ou plugins): marque que você revisou a lista.' };
     body.accept_code = true;
+    // Ligar os plugins do pacote é opt-in e só existe junto da confirmação de código (o servidor também exige).
+    if (activatePlugins && codePluginRows(report).length > 0) body.activate_plugins = true;
   }
   return { body };
 }
@@ -571,4 +585,23 @@ export function jobDuration(job) {
 /** A resposta do servidor é "defina uma senha antes" (403 `password_required`)? */
 export function isPasswordRequired(res) {
   return !!res && res.ok === false && res.error_code === 'password_required';
+}
+
+// ── reinício automático (plugins ativados pelo import) ──────────────────────
+
+/** Passos visíveis do overlay, na ordem. */
+export const RESTART_STEPS = [
+  { id: 'saving', label: 'Salvando o estado da importação' },
+  { id: 'restarting', label: 'Reiniciando o servidor' },
+  { id: 'back', label: 'Servidor voltou' },
+  { id: 'resuming', label: 'Retomando a importação' },
+  { id: 'done', label: 'Resultado' },
+];
+
+/** Depois deste tempo a mensagem muda para "demorando mais que o normal" (sem prazo duro de falha). */
+export const RESTART_SLOW_AFTER_SEC = 180;
+
+/** O servidor voltou? Só pela TROCA do `boot_id` (a heurística "caiu e voltou" engana com --reload). */
+export function serverBack(before, current) {
+  return !!before && !!current && before !== current;
 }

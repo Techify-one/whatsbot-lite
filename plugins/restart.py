@@ -26,9 +26,35 @@ import logging
 import os
 import threading
 import time
+import uuid
 from pathlib import Path
 
 logger = logging.getLogger(__name__)
+
+#: Um id por PROCESSO. ``/health`` o devolve: quem espera o servidor voltar de um reinício (a tela do
+#: Importar/Exportar) detecta a TROCA do id. "Ficou fora do ar e voltou" engana com ``--reload`` e com
+#: proxy que responde no lugar do servidor.
+BOOT_ID = uuid.uuid4().hex
+
+def is_supervised() -> bool:
+    """Alguém religa o servidor depois de um ``os._exit``? Docker (``restart: unless-stopped``), o serviço
+    systemd (``WHATSBOT_SERVICE=1``) ou um launcher que exporta ``WHATSBOT_SUPERVISED=1``
+    (``linux_start.sh``, ``macos_start.command``, ``windows_start.bat``). Sem supervisor o servidor cai e
+    NÃO volta: por isso o reinício automático só é oferecido quando isto é verdadeiro."""
+    return (os.environ.get("WHATSBOT_DOCKER") == "1" or os.environ.get("WHATSBOT_SUPERVISED") == "1"
+            or os.environ.get("WHATSBOT_SERVICE") == "1" or Path("/.dockerenv").exists()
+            or _under_reloader())
+
+def _under_reloader() -> bool:
+    """Este processo é o worker de um ``uvicorn --reload``? Então o reloader (pai) religa o worker quando
+    ``schedule_restart`` toca o gatilho, mesmo sem a variável no ambiente (instância subida na mão).
+    Só Linux (lê ``/proc``); qualquer dúvida ⇒ ``False``."""
+    try:
+        raw = Path(f"/proc/{os.getppid()}/cmdline").read_bytes()
+    except OSError:
+        return False
+    parts = raw.decode("utf-8", "replace").split("\0")
+    return any(p == "uvicorn" or p.endswith("/uvicorn") for p in parts) and "--reload" in parts
 
 _RESTART_DELAY_SECONDS = 1.5
 _RESTART_PENDING = False

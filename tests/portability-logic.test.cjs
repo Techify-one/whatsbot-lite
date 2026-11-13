@@ -377,3 +377,39 @@ test('pendingPlugins tolera relatório sem a lista', async () => {
     assert.deepEqual(pendingPlugins({}), []);
     assert.deepEqual(pendingPlugins({report: {pending_plugin_data: 'x'}}), []);
 });
+
+test('ativar plugins: só vai no pedido com o código aceito e com plugin no pacote', async () => {
+    const {buildConfirmRequest} = await load();
+    const withPlugin = report({code_plugins_total: 1, code_plugins: [{id: 'demo', state: 'new', version: '1.0.0'}]});
+    const base = {report: withPlugin, strategy: {}, acceptCode: true};
+    assert.equal(buildConfirmRequest({...base, activatePlugins: true}).body.activate_plugins, true);
+    assert.equal('activate_plugins' in buildConfirmRequest({...base}).body, false);
+    // sem plugin no pacote (só ferramenta de IA) a opção não existe, mesmo marcada
+    const toolOnly = report({code_tools_total: 1, code_tools: [{name: 't'}]});
+    assert.equal('activate_plugins' in buildConfirmRequest(
+        {report: toolOnly, strategy: {}, acceptCode: true, activatePlugins: true}).body, false);
+    // sem aceitar o código, nada é pedido
+    assert.match(buildConfirmRequest({report: withPlugin, strategy: {}, activatePlugins: true}).error, /código/i);
+});
+
+test('plugins ativados pelo import: o texto da espera muda e a lista sai do relatório', async () => {
+    const {activatedPlugins, waitingPluginsText} = await load();
+    const job = {state: 'awaiting_restart', resume_stage: 'plugins',
+        report: {plugins_activated: ['demo', 'outro'], pending_plugin_data: []}};
+    assert.deepEqual(activatedPlugins(job), ['demo', 'outro']);
+    assert.match(waitingPluginsText(job), /demo, outro/);
+    assert.match(waitingPluginsText(job), /reiniciar/);
+    assert.doesNotMatch(waitingPluginsText(job), /Ative o plugin na aba/);   // já foi ativado
+    assert.deepEqual(activatedPlugins({}), []);
+    assert.deepEqual(activatedPlugins({report: {plugins_activated: 'x'}}), []);
+});
+
+test('reinício: só a TROCA do boot_id conta como "o servidor voltou"', async () => {
+    const {serverBack, RESTART_STEPS, RESTART_SLOW_AFTER_SEC} = await load();
+    assert.equal(serverBack('a', 'b'), true);
+    assert.equal(serverBack('a', 'a'), false);       // mesmo processo: ainda não reiniciou
+    assert.equal(serverBack('a', null), false);      // fora do ar
+    assert.equal(serverBack('', 'b'), false);
+    assert.deepEqual(RESTART_STEPS.map((s) => s.id), ['saving', 'restarting', 'back', 'resuming', 'done']);
+    assert.ok(RESTART_SLOW_AFTER_SEC > 0);
+});

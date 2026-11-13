@@ -227,6 +227,9 @@ echo "========================================"
 echo ""
 
 export NO_COLOR=1
+# Há supervisor (o loop abaixo e o --reload religam o servidor depois de um os._exit): libera o reinício
+# automático do Importar/Exportar (plugins/restart.py:is_supervised).
+export WHATSBOT_SUPERVISED=1
 # Loop externo: cobre quando o uvicorn parent morre ou um plugin chama
 # os._exit (enable/disable via UI dispara schedule_restart).
 while true; do

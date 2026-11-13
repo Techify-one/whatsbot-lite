@@ -55,7 +55,7 @@ plugins/             → sistema de plugins (core, não confundir com storages/p
   manifest.py        → parser plugin.yaml + validação semver
   migrator.py        → runner SQL com prefixo plugin_<id>_ obrigatório
   context.py         → ToolContext, PromptContext (passados aos plugins)
-  restart.py         → schedule_restart() — touch sentinela + os._exit
+  restart.py         → schedule_restart() — touch sentinela + os._exit; `BOOT_ID` (devolvido por `/health`) e `is_supervised()` (reinício automático do Importar/Exportar)
   package.py         → barreiras de zip do CÓDIGO de plugin (zip-slip, link simbólico, bomba contada em bytes reais) e instalar/trocar a pasta; usado pelo "Importar (.zip)", pelo "Atualizar" e pelo Importar/Exportar
 assets/              → recursos não-código (templates copiados em runtime)
   plugin_examples/   → plugins de referência (copiados pra storages/plugins/ no 1º boot)
@@ -815,7 +815,9 @@ usuário define o limite em `disk_limit_gb` pela própria tela. É só informati
 | POST | `/api/portability/imports` | Upload multipart (em blocos, teto de 5 GB, 413) → job de **verificação** que não grava nada |
 | POST | `/api/portability/imports/{id}/confirm` | `{strategy, password?, overwrite_secrets?, acknowledged: true, accept_code?}` → job de import sobre o mesmo pacote (`accept_code: true` é obrigatório quando a verificação achou `code_tools_total > 0`, senão 400 `code_not_accepted`) |
 | POST | `/api/portability/imports/{id}/recalculate` | Refaz a verificação com outras estratégias |
-| POST | `/api/portability/jobs/{id}/resume` | Continua um import interrompido (pede a senha do pacote de novo) |
+| POST | `/api/portability/jobs/{id}/resume` | Continua um import interrompido ou esperando plugins (pede a senha do pacote de novo; 409 com `data.blockers` enquanto um plugin não está ativo e carregado) |
+| GET | `/api/portability/restart-info` | `{boot_id, supervised}` para o reinício automático |
+| POST | `/api/portability/restart` | Reinicia o servidor para o import em pausa carregar os plugins (409 sem import esperando ou com outro job) |
 | GET | `/api/portability/jobs`, `/jobs/{id}`, `/jobs/{id}/errors` | Consulta por polling; resposta é lista branca (sem `params` nem caminho) |
 | POST | `/api/portability/jobs/{id}/cancel` | Cancela o job |
 
@@ -847,7 +849,7 @@ Leia antes de mexer. As regras que quebram segurança se ignoradas:
   "Atualizar"): bytes REAIS contados, e a prévia faz o ensaio (`safe_extract(zf, None)`) para recusar a mesma bomba. Config
   `plugin.<id>.*`: o NOME decide o segredo (`registry.is_secret_field`), loopback não viaja. Dados em DUAS etapas: a tabela só
   existe depois de ativar o plugin e reiniciar, então o import pausa em `awaiting_restart` com `resume_stage='plugins'` e o
-  operador clica "Continuar". Nome de tabela/coluna vem do catálogo do destino, nunca do pacote; `contact_id` viaja pelo
+  operador clica "Continuar" (ou, com a opção `activate_plugins` do popup e um supervisor, a tela reinicia sozinha: `/api/portability/restart` + troca do `boot_id` em `/health`; os launchers exportam `WHATSBOT_SUPERVISED=1`). Nome de tabela/coluna vem do catálogo do destino, nunca do pacote; `contact_id` viaja pelo
   TELEFONE (`__refs`); `media_path` nunca vem do pacote. Testes: `tests/test_portability_plugins.py`, `tests/test_plugin_package.py`,
   `tests/test_plugin_import_route.py`.
 - **Aviso novo** = uma linha em [portability/warnings.py](portability/warnings.py) + a frase em

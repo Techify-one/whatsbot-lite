@@ -54,6 +54,13 @@ def _public(job: dict) -> dict:
     out["has_package"] = bool(job.get("package_path")) and job.get("state") == jobs.State.SUCCEEDED
     return out
 
+def _blockers_text(blockers: list[dict]) -> str:
+    why = {"not_enabled": "o plugin {p} não está ativo",
+           "not_loaded": "o plugin {p} ainda não foi carregado pelo servidor (reinicie)",
+           "no_tables": "o plugin {p} ainda não criou as tabelas dele (reinicie)"}
+    parts = [why.get(b.get("why"), "confira o plugin {p}").format(p=b.get("plugin")) for b in blockers]
+    return "A importação não pôde continuar: " + "; ".join(parts) + "."
+
 def _truthy(v) -> bool:
     return v is True or (isinstance(v, str) and v.strip().lower() in ("1", "true", "on", "yes"))
 
@@ -294,6 +301,8 @@ def register_routes(app, deps):
         params = {"strategy": strategy, "package_path": dry["package_path"],
                   "overwrite_secrets": _truthy(body.get("overwrite_secrets")),
                   "accept_code": _truthy(body.get("accept_code")),
+                  # Ligar os plugins do pacote é opt-in e só vale com a confirmação de código.
+                  "activate_plugins": _truthy(body.get("activate_plugins")) and _truthy(body.get("accept_code")),
                   "has_password": bool(password), "package_sha256": dry.get("package_sha256")}
         new_id = str(uuid.uuid4())
         async with create_lock:
@@ -377,6 +386,14 @@ def register_routes(app, deps):
         password = body.get("password") or ""
         if (job.get("params") or {}).get("has_password") is True and not password:
             return _err("Este pacote tem segredos: informe a senha para continuar.")
+        # Continuar antes de ativar/reiniciar não importa nada e só gasta a tentativa: recusa dizendo o que
+        # falta (o botão da tela também espera, mas a rota é a barreira real).
+        if job.get("resume_stage"):
+            from portability import handlers as _handlers
+            blockers = await asyncio.to_thread(_handlers.resume_blockers, job.get("report"), deps)
+            if blockers:
+                return _no_store({"ok": False, "error": _blockers_text(blockers),
+                                  "data": {"blockers": blockers}}, 409)
         async with create_lock:
             busy = await _busy_error(except_id=job_id)
             if busy:
@@ -394,6 +411,39 @@ def register_routes(app, deps):
             return _err("Este import não está esperando para continuar.", 409)
         logger.info("[Portability] import %s retomado pelo operador", job_id[:8])
         return _no_store({"ok": True, "data": _public(await asyncio.to_thread(jobs.get, job_id))}, 202)
+
+    @app.get("/api/portability/restart-info")
+    async def restart_info():
+        """O que a tela precisa para o reinício AUTOMÁTICO: o ``boot_id`` atual (a troca dele é o sinal de
+        que o servidor voltou) e se há supervisor para religá-lo."""
+        denied = _gate()
+        if denied:
+            return denied
+        from plugins.restart import BOOT_ID, is_supervised
+        return _no_store({"ok": True, "data": {"boot_id": BOOT_ID, "supervised": is_supervised()}})
+
+    @app.post("/api/portability/restart")
+    async def restart_for_import():
+        """Reinicia o servidor para o import em pausa carregar os plugins que ativou.
+
+        Só vale com um import ESPERANDO o reinício (senão qualquer um com a senha do painel derrubaria a
+        instalação à toa) e é o mesmo ``schedule_restart`` do liga/desliga de plugin."""
+        denied = _gate()
+        if denied:
+            return denied
+        rows = await asyncio.to_thread(jobs.list_recent, 20, "import")
+        waiting = [r for r in rows if r["state"] == jobs.State.AWAITING_RESTART and r.get("resume_stage")]
+        if not waiting:
+            return _err("Nenhuma importação está esperando um reinício.", 409)
+        # Reiniciar com outro job rodando o perderia. Quem espera o reinício não conta: é o que se reinicia.
+        busy = await asyncio.to_thread(jobs.busy_jobs)
+        if busy:
+            return _err("Há outra operação de importar/exportar em andamento. Espere terminar para "
+                        "reiniciar o servidor.", 409, error_code="job_busy")
+        from plugins.restart import schedule_restart
+        logger.info("[Portability] reinício pedido pelo import %s (plugins)", waiting[0]["id"][:8])
+        schedule_restart(reason="portability import: reinício para carregar plugins")
+        return _no_store({"ok": True, "data": {"restarting": True}})
 
     # ── consulta ────────────────────────────────────────────────────────────
 

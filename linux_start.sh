@@ -14,6 +14,10 @@ set -u
 
 # Porta web (frontend + REST + WS). Pode ser sobrescrita externamente.
 export WHATSBOT_WEB_PORT="${WHATSBOT_WEB_PORT:-8090}"
+# Há supervisor: o loop abaixo (ou o Restart= do systemd, ou o --reload) religa o servidor depois de um
+# os._exit. É o que deixa o Importar/Exportar reiniciar sozinho para carregar os plugins importados
+# (plugins/restart.py:is_supervised). Sem isto a tela só oferece o reinício manual.
+export WHATSBOT_SUPERVISED=1
 # Porta interna do subprocess GOWA (não exposta).
 export WHATSBOT_GOWA_PORT="${WHATSBOT_GOWA_PORT:-64998}"
 

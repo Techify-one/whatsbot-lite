@@ -256,6 +256,7 @@ def apply_plugin(row: dict, strategy: str, env: Env, dry_run: bool) -> str:
             env.warn("plugins", pid, "plugin_package_invalid")
             return ERROR
         plugin_repo.upsert(pid, version, enabled=False)        # DESLIGADO, sempre
+        env.cache.setdefault("plugins_installed", []).append(pid)   # o opt-in "ativar" só mexe nestes
     env.mark("plugins", pid)
     return CREATE if state == "new" else UPDATE
 

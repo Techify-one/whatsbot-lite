@@ -421,12 +421,62 @@ def run_import(ctx: JobContext) -> dict:
                   "secrets": secrets_state, "warnings": summarize_warnings(env.warnings),
                   "post": post, **_ai.code_tools_report(env), **_plugins.code_plugins_report(env)}
         _log_done(ctx, report, reader.manifest, time.time() - started)
-        if pending:
+        activated: list[str] = []
+        if ctx.params.get("activate_plugins") and env.accept_code:
+            # Opt-in do operador, dado no popup de confirmação (que exige o "revisei o código"). Só grava
+            # ``enabled=1``: nada carrega agora, o código só roda no próximo boot.
+            activated = _activate_plugins(env, pending)
+            if activated:
+                report["plugins_activated"] = activated
+        if pending or activated:
             # 2ª ETAPA: a tabela do plugin só existe depois de ele ser ATIVADO e o servidor reiniciar (as
-            # migrations rodam no boot). O que já entrou fica; o resto espera o operador.
+            # migrations rodam no boot). O que já entrou fica; o resto espera. Plugin recém-ativado também
+            # pausa, mesmo sem dado pendente: sem o reinício ele não carrega.
             report["pending_plugin_data"] = pending
             raise JobPaused(State.AWAITING_RESTART, STAGE_PLUGINS, report=report)
         return report
+
+def _activate_plugins(env: ents.Env, pending: list[str]) -> list[str]:
+    """Liga (``plugins.enabled=1``) os plugins que este import instalou ou que têm dado esperando.
+
+    Só o registro no banco: não carrega nem reinicia nada. NÃO emite ``plugin.enabled`` (importar não é
+    atividade: o próprio boot seguinte emite ``plugin.loaded``). Devolve os ids que mudaram de desligado
+    para ligado."""
+    from db.repositories import plugin_repo
+    ids = {str(label).split("/")[0] for label in pending}
+    ids |= set(env.cache.get("plugins_installed") or [])
+    flipped: list[str] = []
+    for pid in sorted(ids):
+        row = plugin_repo.get(pid)
+        if row is None or row.get("enabled"):
+            continue
+        if plugin_repo.set_enabled(pid, True):
+            flipped.append(pid)
+    return flipped
+
+def resume_blockers(report: dict | None, deps: Any) -> list[dict]:
+    """Por que a etapa 2 AINDA não pode rodar (lista vazia = pode).
+
+    Rodar antes de ativar e reiniciar não importa nada e o job terminaria como "concluído" com a sobra
+    escondida. Cada item: ``{plugin, why}``, com ``why`` em ``not_enabled`` (ativar na tela de Plugins),
+    ``not_loaded`` (reiniciar) ou ``no_tables`` (reiniciar: as migrations rodam no boot)."""
+    from db.repositories import plugin_repo
+    rep = report or {}
+    labels = [str(t) for t in (rep.get("pending_plugin_data") or [])]
+    wanted = {t.split("/")[0] for t in labels} | {str(p) for p in (rep.get("plugins_activated") or [])}
+    with_tables = {t.split("/")[0] for t in labels}
+    registry = getattr(deps, "plugins_registry", None)
+    loaded = getattr(registry, "loaded", None) if registry is not None else None
+    out: list[dict] = []
+    for pid in sorted(wanted):
+        row = plugin_repo.get(pid)
+        if row is None or not row.get("enabled"):
+            out.append({"plugin": pid, "why": "not_enabled"})
+        elif loaded is not None and pid not in loaded:
+            out.append({"plugin": pid, "why": "not_loaded"})
+        elif pid in with_tables and not plugin_repo.applied_migrations(pid):
+            out.append({"plugin": pid, "why": "no_tables"})
+    return out
 
 def _run_import_stage2(ctx: JobContext) -> dict:
     """Retomada manual: importa os dados dos plugins que já foram ativados (a tabela existe agora).
@@ -436,6 +486,10 @@ def _run_import_stage2(ctx: JobContext) -> dict:
     sem plugin ativado, o job volta a esperar — o operador pode clicar de novo quando ativar."""
     prev = ctx.job.get("report") or {}
     only = {t for t in (prev.get("pending_plugin_data") or []) if isinstance(t, str)}
+    if "pending_plugin_data" in prev and not only:
+        # Só havia plugin a ativar/reiniciar (nenhum dado esperando): a 1ª etapa já importou tudo.
+        done = {k: v for k, v in prev.items() if k != "pending_plugin_data"}
+        return done
     with _open_package(ctx) as reader:
         _check_integrity(reader)
         secrets, secrets_state = _load_secrets(ctx, reader)

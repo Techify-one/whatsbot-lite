@@ -300,7 +300,10 @@ def create_app(
 
     @app.get("/health")
     async def healthcheck():
-        return JSONResponse({"ok": True})
+        # ``boot_id`` muda a cada início de processo (ver ``plugins.restart.BOOT_ID``): a tela do
+        # Importar/Exportar o usa para saber que o servidor reiniciou de verdade.
+        from plugins.restart import BOOT_ID
+        return JSONResponse({"ok": True, "boot_id": BOOT_ID})
 
     register_pwa_routes(app, web_dir)
 

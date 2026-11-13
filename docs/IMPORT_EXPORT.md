@@ -147,7 +147,9 @@ Três coisas, três riscos. O código está em [portability/plugins_io.py](../po
 Mesma regra das ferramentas de IA, com o que muda por ser uma pasta inteira de código:
 
 - o plugin **entra sempre desligado**, e o que já estava instalado e é **substituído também fica desligado** (trocar o
-  código de algo que roda não pode ser silencioso). Ativar é uma decisão manual, na aba Plugins;
+  código de algo que roda não pode ser silencioso). Ativar é uma decisão do operador: na aba Plugins, ou pela opção
+  **"Ativar os plugins do pacote"** do popup de confirmação (ver "Reinício"), que só existe depois do "Entendo que o
+  pacote traz código";
 - só é gravado com **`accept_code`**: a rota exige quando `code_tools_total + code_plugins_total > 0` (pelo que o pacote
   **carrega**, não pela estratégia escolhida) e o motor recusa de novo (aviso `plugin_code_not_accepted`);
 - `skip` é o padrão e **nunca** toca num plugin instalado. `overwrite` só atualiza para uma versão **maior** (nunca
@@ -185,8 +187,23 @@ nunca criamos tabela de plugin por conta própria: o schema é do plugin. Então
 2. O operador **ativa o plugin**, espera o servidor reiniciar e clica em **Continuar importação**. A 2ª etapa só mexe em
    `plugin_data` e preserva os números da 1ª. Se ainda sobrar tabela sem plugin ativo, o job volta a esperar.
 
-O Lite **não** reinicia sozinho no meio do import (o `plugins/restart.py` não tem `is_supervised()` nem `boot_id`): a retomada é
-**sempre manual**.
+#### Reinício (automático ou manual)
+
+- **Opt-in `activate_plugins`** (caixa no popup, desligada por padrão; a rota só a aceita junto de `accept_code`): no fim
+  da 1ª etapa o import grava `plugins.enabled=1` nos plugins que **ele instalou** ou que **têm dado esperando**. Só o
+  registro: nada carrega agora e **nenhum evento `plugin.enabled` é emitido** (importar não é atividade). O job pausa mesmo
+  sem dado pendente, porque o plugin só passa a valer depois do reinício (`report.plugins_activated`).
+- **Reinício automático** (com supervisor): `GET /api/portability/restart-info` devolve `boot_id` e `supervised`;
+  `POST /api/portability/restart` chama o mesmo `schedule_restart` do liga/desliga de plugin, e só com um import
+  **esperando** (`resume_stage`) e **sem outro job** em andamento (409). A tela (`RestartOverlay.js`) espera a **TROCA do
+  `boot_id`** em `/health` (a heurística "caiu e voltou" engana com `--reload`), tenta `resume` por até ~1 min (409 enquanto o
+  plugin carrega) e acompanha a 2ª etapa. A senha do pacote fica só na memória do navegador.
+- **Supervisor** (`plugins/restart.py:is_supervised`): `WHATSBOT_DOCKER=1`, `/.dockerenv`, `WHATSBOT_SERVICE=1` (systemd) ou
+  `WHATSBOT_SUPERVISED=1`, que os três launchers (`linux_start.sh`, `macos_start.command`, `windows_start.bat`) exportam, ou
+  um worker de `uvicorn --reload`. Sem supervisor o servidor cai e não volta, então a tela só oferece "Reiniciar o servidor
+  mesmo assim" (com o aviso) e o **Continuar** manual.
+- **`resume` recusa (409) dizendo qual plugin falta** (`handlers.resume_blockers`): `not_enabled`, `not_loaded` (reinicie) ou
+  `no_tables`. Antes ele só gastava a tentativa e voltava a pausar.
 
 Regras de cada tabela:
 
@@ -324,7 +341,7 @@ o CSS é gerado (`cd tools/css && npm run build`, conferido por `npm run check`)
 ## O que ainda não viaja
 
 - Arquivos que o plugin guarda em disco (`storages/plugin_data/<id>/`) e `media_path` de tabela de plugin **não viajam**.
-- Reinício automático entre as duas etapas dos plugins (o Lite só tem a retomada manual).
+- O reinício automático depende de supervisor (ver "Reinício"): fora de launcher, systemd e Docker a retomada é manual.
 - Telefone de grupo (JID `…@g.us`) e foto de grupo seguem as mesmas regras do contato.
 
 ## Limites conhecidos

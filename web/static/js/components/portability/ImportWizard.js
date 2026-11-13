@@ -8,14 +8,15 @@ import { h } from 'preact';
 import { useEffect, useRef, useState } from 'preact/hooks';
 import htm from 'htm';
 import {
-  confirmImport, listJobs, recalculateImport, resumeImport, uploadImport,
+  confirmImport, getRestartInfo, listJobs, recalculateImport, resumeImport, uploadImport,
 } from '../../services/portabilityApi.js';
 import {
-  MAX_IMPORT_BYTES, buildConfirmRequest, canContinue, codePluginRows, codeToolRows,
+  MAX_IMPORT_BYTES, buildConfirmRequest, activatedPlugins, canContinue, codePluginRows, codeToolRows,
   confirmNeedsPassword, findResumable, formatBytes, initialStrategy, interruptedText, isInterrupted,
   isPasswordRequired, isPreviewStale, isWaitingPlugins, overwriteRows, secretsState, totalChanges,
   waitingPluginsText,
 } from '../../utils/portabilityLogic.js';
+import { RestartOverlay } from './RestartOverlay.js';
 import { ConfirmImportModal } from './ConfirmImportModal.js';
 import { ErrorDetailsModal } from './ErrorDetailsModal.js';
 import { ResultTable, Warnings } from './ImportReport.js';
@@ -56,8 +57,19 @@ export function ImportWizard({ onChanged, onShowHistory, onPasswordRequired }) {
   const [attempt, setAttempt] = useState(0);        // remonta o JobProgress a cada retomada
   const [resumePw, setResumePw] = useState('');
   const [resuming, setResuming] = useState(false);
+  const [activatePlugins, setActivatePlugins] = useState(false);   // opt-in do popup: ligar os plugins do pacote
+  const [restartInfo, setRestartInfo] = useState(null);            // {boot_id, supervised}
+  const [autoRestart, setAutoRestart] = useState(false);           // overlay do reinício automático aberto
+  const autoStarted = useRef('');                                  // job para o qual o overlay já abriu 1×
 
   // F5 no meio do fluxo: o estado vive no servidor (jobs), então a tela se reconstrói a partir dele.
+  // Supervisor + boot_id: decidem entre o reinício automático e o botão manual.
+  useEffect(() => {
+    let alive = true;
+    getRestartInfo().then((r) => { if (alive && r && r.ok) setRestartInfo(r.data); }).catch(() => {});
+    return () => { alive = false; };
+  }, []);
+
   useEffect(() => {
     let alive = true;
     listJobs(30).then((res) => {
@@ -135,7 +147,7 @@ export function ImportWizard({ onChanged, onShowHistory, onPasswordRequired }) {
   };
 
   const confirmArgs = (acceptCode) => ({
-    report: dry.report, strategy, password: savedPw || confirmPw, overwriteSecrets, acceptCode });
+    report: dry.report, strategy, password: savedPw || confirmPw, overwriteSecrets, acceptCode, activatePlugins });
 
   // 1º passo do "Confirmar importação": valida e só então abre o popup.
   const askToConfirm = () => {
@@ -166,6 +178,27 @@ export function ImportWizard({ onChanged, onShowHistory, onPasswordRequired }) {
     // Interrompido ainda vai precisar da senha para continuar; terminou de vez, esquece.
     if (['succeeded', 'failed', 'cancelled'].includes(job.state)) setSavedPw('');
     if (onChanged) onChanged();
+    // Pausa porque o import ATIVOU plugins e há supervisor: o reinício roda sozinho, sem recarregar a página
+    // (a senha do pacote só existe na memória do navegador). Uma vez por job; o botão manual segue como saída.
+    if (isWaitingPlugins(job) && activatedPlugins(job).length && restartInfo && restartInfo.supervised
+        && autoStarted.current !== job.id) {
+      openAutoRestart(job.id);
+    }
+  };
+
+  // O overlay compara o boot_id ATUAL com o de agora: usar o da abertura da tela daria "voltou" sem ter caído
+  // se já houve um reinício antes.
+  const openAutoRestart = async (jobId) => {
+    const fresh = await getRestartInfo();
+    if (fresh && fresh.ok) setRestartInfo(fresh.data);
+    autoStarted.current = jobId;
+    setAutoRestart(true);
+  };
+
+  const restartFinished = (job) => {
+    setFinal(job);
+    if (['succeeded', 'failed', 'cancelled'].includes(job.state)) setSavedPw('');
+    if (onChanged) onChanged();
   };
 
   // Import interrompido (o servidor reiniciou no meio): a senha só vivia na memória do processo que
@@ -189,6 +222,7 @@ export function ImportWizard({ onChanged, onShowHistory, onPasswordRequired }) {
     writeDismissed(dryId);
     setFile(null); setUploadPw(''); setSavedPw(''); setError(''); setSent(null); setDryId(''); setDry(null);
     setStrategy({}); setConfirmPw(''); setOverwriteSecrets(false); setImportId(''); setFinal(null);
+    setActivatePlugins(false); setAutoRestart(false); autoStarted.current = '';
     setAttempt(0); setResumePw(''); setAskConfirm(false); setErrorsFor(null); setRecalcError('');
     if (fileInput.current) fileInput.current.value = '';
   };
@@ -198,7 +232,10 @@ export function ImportWizard({ onChanged, onShowHistory, onPasswordRequired }) {
   const changes = report ? totalChanges(report) : 0;
   const pct = sent && sent.total ? Math.round((100 * sent.loaded) / sent.total) : 0;
   const stale = !!report && isPreviewStale(report, strategy);
-  const optionLabels = [overwriteSecrets && 'Sobrescrever segredos que já existem'].filter(Boolean);
+  const optionLabels = [
+    overwriteSecrets && 'Sobrescrever segredos que já existem',
+    activatePlugins && 'Ativar os plugins do pacote (exige reinício do servidor)',
+  ].filter(Boolean);
 
   return html`
     <section class="flex flex-col gap-4">
@@ -317,7 +354,22 @@ export function ImportWizard({ onChanged, onShowHistory, onPasswordRequired }) {
                 onInput=${(e) => setResumePw(e.target.value)} placeholder="Senha do pacote"
                 class="wa-field w-full sm:max-w-sm px-3 py-2 rounded-md text-[14px]" />` : null}
             ${error ? html`<p class="text-[13px] text-red-600">${error}</p>` : null}
+            ${isWaitingPlugins(final) && activatedPlugins(final).length && restartInfo ? (restartInfo.supervised ? html`
+              <p class="text-[13px] text-wa-secondary">
+                Este servidor se religa sozinho: o reinício é automático e a tela continua a importação.
+              </p>` : html`
+              <p class="text-[13px] text-wa-secondary">
+                Não detectamos algo que religue o servidor sozinho (Docker, serviço systemd ou um launcher com
+                <code>WHATSBOT_SUPERVISED=1</code>). Se você tem um loop ou serviço que o religa, use “Reiniciar o servidor
+                mesmo assim”; senão, reinicie-o por fora e SÓ DEPOIS clique em Continuar.
+              </p>`) : null}
             <div class="flex flex-wrap gap-2">
+              ${isWaitingPlugins(final) && activatedPlugins(final).length && restartInfo ? html`
+                <button type="button" onClick=${() => openAutoRestart(final.id)}
+                  title=${restartInfo.supervised ? '' : 'Só use se algo religa o servidor sozinho'}
+                  class="border border-wa-border text-wa-text text-sm font-medium rounded-lg py-2 px-4 hover:bg-wa-hover cursor-pointer">
+                  ${restartInfo.supervised ? 'Reiniciar e continuar' : 'Reiniciar o servidor mesmo assim'}
+                </button>` : null}
               <button type="button" onClick=${resume} disabled=${resuming}
                 class="bg-wa-teal text-white text-sm font-medium rounded-lg py-2 px-4 hover:opacity-90 disabled:opacity-50 cursor-pointer">
                 ${resuming ? 'Continuando…' : 'Continuar importação'}
@@ -348,7 +400,12 @@ export function ImportWizard({ onChanged, onShowHistory, onPasswordRequired }) {
       ${askConfirm && report ? html`
         <${ConfirmImportModal} overwrites=${overwriteRows(report, strategy)} options=${optionLabels}
           codeTools=${codeToolRows(report)} codePlugins=${codePluginRows(report)}
+          activatePlugins=${activatePlugins} onActivatePlugins=${setActivatePlugins}
           stale=${stale} busy=${confirming} onConfirm=${confirm} onCancel=${() => setAskConfirm(false)} />` : null}
+      ${autoRestart && importId && restartInfo ? html`
+        <${RestartOverlay} jobId=${importId} bootId=${restartInfo.boot_id} password=${savedPw || resumePw || confirmPw}
+          attempt=${attempt} onFinished=${restartFinished}
+          onClose=${() => { setAutoRestart(false); setResumePw(''); setConfirmPw(''); setAttempt((n) => n + 1); }} />` : null}
       ${errorsFor ? html`<${ErrorDetailsModal} jobId=${errorsFor.jobId} entity=${errorsFor.entity}
         onClose=${() => setErrorsFor(null)} />` : null}
     </section>

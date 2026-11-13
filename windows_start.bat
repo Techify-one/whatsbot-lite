@@ -240,6 +240,8 @@ exit
 cd /d "%~dp0"
 call venv\Scripts\activate.bat
 set NO_COLOR=1
+:: Ha supervisor (o --reload religa o servidor depois do reinicio): libera o reinicio automatico do Importar/Exportar.
+set WHATSBOT_SUPERVISED=1
 :: uvicorn valida cada --reload-dir antes de subir; storages\plugins e criada
 :: em runtime, entao precisa existir antes (senao o uvicorn aborta).
 if not exist "storages\plugins" mkdir "storages\plugins"
