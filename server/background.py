@@ -19,6 +19,8 @@ AI_REACTIVATION_DELAY = 20     # seconds
 
 # How often the background sweep re-checks every contact's avatar for changes.
 AVATAR_REFRESH_INTERVAL = 1800  # seconds (30 min)
+PORTABILITY_ORPHAN_INTERVAL = 30   # seconds: job running com heartbeat parado
+PORTABILITY_SWEEP_INTERVAL = 3600  # seconds: pacotes vencidos e jobs antigos
 
 # How often we ask GitHub whether a newer GOWA was released, and how long we
 # wait after boot before the first check (lets GOWA and the panel settle).
@@ -358,3 +360,46 @@ async def gowa_update_check_loop(deps):
 
         if not await _sleep(GOWA_UPDATE_CHECK_INTERVAL):
             return
+
+
+async def portability_jobs_loop(deps):
+    """Executa os jobs de importar/exportar da tabela ``portability_jobs``.
+
+    No boot devolve à fila (import) ou falha (export) o job cujo heartbeat parou: o processo pode ter
+    morrido no meio. Depois faz polling da fila (um job por vez por processo; o claim é um UPDATE
+    decidido por ``rowcount``, portável entre SQLite e Postgres) e limpa pacotes vencidos. O estado
+    está em tabela: nada aqui depende de memória que o reinício perderia.
+    """
+    from portability import handlers, jobs
+
+    state = deps.state
+    handlers.register_all()
+    jobs.set_runtime_deps(deps)
+    wid = jobs.PROCESS_WID
+    try:
+        await asyncio.to_thread(jobs.recover_orphans)
+    except Exception as e:
+        logger.warning("[Portability] recover_orphans falhou: %s", e)
+
+    last_sweep = 0.0
+    last_orphans = time.time()
+    while not state.stop_event.is_set():
+        try:
+            # Esvazia a fila antes de dormir.
+            while not state.stop_event.is_set() and await jobs.run_one(wid):
+                pass
+            # Um reinício rápido religa o processo com o heartbeat do morto ainda "fresco": por isso
+            # a varredura de órfãos também é periódica, não só no boot.
+            if time.time() - last_orphans >= PORTABILITY_ORPHAN_INTERVAL:
+                last_orphans = time.time()
+                await asyncio.to_thread(jobs.recover_orphans)
+            if time.time() - last_sweep >= PORTABILITY_SWEEP_INTERVAL:
+                last_sweep = time.time()
+                await asyncio.to_thread(jobs.purge_expired)
+                await asyncio.to_thread(jobs.purge_orphan_dirs)
+        except Exception as e:
+            logger.warning("[Portability] loop error: %s", e)
+        slept = 0.0
+        while slept < jobs.POLL_INTERVAL_SEC and not state.stop_event.is_set():
+            await asyncio.sleep(1.0)
+            slept += 1.0

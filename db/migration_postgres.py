@@ -29,6 +29,9 @@ from sqlalchemy.engine import Engine
 from db.engine import get_engine
 from db.tables import CORE_TABLES, metadata as core_metadata
 
+#: Tabelas que NÃO são copiadas na migração SQLite → Postgres (estado de execução, não dado do usuário).
+EPHEMERAL_TABLES = frozenset({"portability_jobs", "portability_job_errors"})
+
 logger = logging.getLogger(__name__)
 
 
@@ -331,7 +334,10 @@ def migrate_sqlite_to_postgres(
         plugin_names = _discover_plugin_tables(source)
         plugin_tables = _reflect_plugin_tables(source, target, plugin_names) if plugin_names else {}
 
-        ordered = list(core_metadata.sorted_tables) + [plugin_tables[n] for n in plugin_names]
+        # Jobs de importar/exportar são efêmeros e apontam para pacotes e processos DESTA instalação:
+        # a tabela existe no destino (Alembic) mas fica vazia.
+        ordered = ([t for t in core_metadata.sorted_tables if t.name not in EPHEMERAL_TABLES]
+                   + [plugin_tables[n] for n in plugin_names])
         progress.stage = "copying"
         progress.tables_total = len(ordered)
         progress.message = "Copiando dados"
