@@ -10,3 +10,4 @@ alembic>=1.13,<2.0
 psycopg[binary]>=3.1
 segno>=1.6,<2.0
 pytest>=8,<9
+cryptography>=43,<47

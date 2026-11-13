@@ -40,6 +40,7 @@ COPY config/ config/
 COPY gowa/ gowa/
 COPY db/ db/
 COPY plugins/ plugins/
+COPY portability/ portability/
 COPY server/ server/
 COPY web/ web/
 COPY main.py alembic.ini GOWA_VERSION WHATSBOT_VERSION AGENTS.md CLAUDE.md README.md ./
