@@ -57,6 +57,21 @@ class Env:
     late_errors: dict[str, int] = field(default_factory=dict)
     #: rodam ao fim das entidades (também quando o job é cancelado no meio).
     flush_hooks: list = field(default_factory=list)
+    #: ---- mídia e fotos de perfil (``portability.media`` / ``portability.avatars``) ----
+    #: export: ``{"enabled", "from", "to"}``; import: vazio.
+    media: dict = field(default_factory=dict)
+    #: export: ``{membro_do_pacote: (raiz, nome)}`` — copiados DEPOIS das mensagens, porque o
+    #: ``zipfile`` não aceita dois fluxos de escrita abertos ao mesmo tempo.
+    media_wanted: dict = field(default_factory=dict)
+    media_bytes: int = 0
+    #: import: o leitor do pacote e os nomes que ele traz em ``media/`` e ``avatars/``.
+    media_reader: Any = None
+    media_members: frozenset = frozenset()
+    #: export: foto ligada? e ``{membro_do_pacote: telefone}``, copiados depois das mensagens.
+    avatars: bool = False
+    avatar_wanted: dict = field(default_factory=dict)
+    avatar_bytes: int = 0
+    avatar_members: frozenset = frozenset()
     #: último ``(entidade, chave, código)`` avisado — o laço o usa como motivo do ERRO da linha.
     last_warn: tuple | None = None
     #: destino dos erros por linha (``jobs.ErrorSink``); ``None`` = não grava (export, testes).

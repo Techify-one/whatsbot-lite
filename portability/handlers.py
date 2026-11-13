@@ -23,9 +23,11 @@ from typing import Any, Iterator
 
 from sqlalchemy import text
 
+from portability import avatars as avatars_io
 from portability import crypto
 from portability import entities as ents
 from portability import jobs
+from portability import media as media_io
 from portability import registry as reg
 from portability.base import mask_phone
 from portability.format import (SECRETS_NAME, Manifest, PackageError, PackageReader,
@@ -144,7 +146,14 @@ def run_export(ctx: JobContext) -> dict:
         except crypto.WeakPasswordError as exc:
             raise JobFailed(str(exc)) from None
     names = [e for e in IMPORT_ORDER if e in reg.entities_for(scopes)]
+    try:
+        media_cfg = media_io.parse_params(params, scopes)
+    except ValueError as exc:
+        raise JobFailed(str(exc)) from None
     env = ents.Env(include_secrets=include_secrets)
+    env.avatars = avatars_io.parse_params(params, scopes)
+    if media_cfg:
+        env.media = {"enabled": True, "from": media_cfg["media_from"], "to": media_cfg["media_to"]}
     job_dir = _job_dir(ctx)
     part = os.path.join(job_dir, "package.zip.part")
     final = os.path.join(job_dir, "package.zip")
@@ -152,12 +161,23 @@ def run_export(ctx: JobContext) -> dict:
     try:
         manifest = Manifest(app_version=_app_version(), alembic_head=_alembic_head(),
                             created_at=time.time(), scopes=scopes,
-                            options={"include_secrets": include_secrets},
+                            options={"include_secrets": include_secrets, **({"media": {
+                                "from": media_cfg["media_from"], "to": media_cfg["media_to"]}}
+                                if media_cfg else {})},
                             source_instance=_source_instance())
         with PackageWriter(part) as w:
             for name in names:
                 w.write_ndjson(name, _metered(
                     ctx, "export", name, ents.entity(name).export(env), counts))
+            if env.media_wanted:
+                # Depois das mensagens: o zipfile não aceita dois fluxos de escrita abertos ao mesmo
+                # tempo, e só ao fim se sabe quais arquivos as linhas pediram.
+                total = len(env.media_wanted)
+                counts["media"] = media_io.copy_wanted(w, env, lambda i: (
+                    ctx.check_cancel(), ctx.progress(stage="export", entity="media", done=i,
+                                                     percent=int(i * 100 / total))))
+            if env.avatar_wanted:
+                counts["avatars"] = avatars_io.copy_wanted(w, env, lambda i: ctx.check_cancel())
             ctx.progress(stage="export", entity="finalize", done=1, total=1, percent=100)
             ctx.check_cancel()
             if include_secrets and env.secrets:
@@ -175,6 +195,7 @@ def run_export(ctx: JobContext) -> dict:
         raise
     ctx.set_package(final)
     return {"counts": counts, "scopes": scopes, "secrets_included": bool(env.secrets),
+            "media_included": bool(media_cfg), "avatars_included": bool(counts.get("avatars")),
             "bytes": os.path.getsize(final), "warnings": summarize_warnings(env.warnings)}
 
 # ═══ leitura do pacote ══════════════════════════════════════════════════════
@@ -238,6 +259,10 @@ def _run_entities(ctx: JobContext, reader: PackageReader, names: list[str], env:
                   strategy: dict[str, str], dry_run: bool) -> dict[str, dict[str, int]]:
     stage = "dryrun" if dry_run else "import"
     result: dict[str, dict[str, int]] = {}
+    env.media_reader = reader
+    env.media_members = frozenset(n[len("media/"):] for n in reader.names() if n.startswith("media/"))
+    env.avatar_members = frozenset(n[len("avatars/"):] for n in reader.names()
+                                   if n.startswith("avatars/"))
     env.finalizers.clear()
     env._finalizer_keys.clear()
     try:
@@ -371,6 +396,8 @@ def _postprocess(ctx: JobContext, env: ents.Env) -> dict:
             handler.tag_registry._load()
             out["tags_reloaded"] = True
         from plugins.context import broadcast       # thread-safe; o handler roda numa thread
+        if env.cache.get("media_restored"):
+            _refresh_files(deps)
         if env.config_changed:
             broadcast("config_saved", {})
         if out["tags_reloaded"]:
@@ -379,6 +406,12 @@ def _postprocess(ctx: JobContext, env: ents.Env) -> dict:
         logger.warning("[Portability] pós-processo falhou", exc_info=True)
         out["post_failed"] = True
     return out
+
+def _refresh_files(deps: Any) -> None:
+    """Arquivos novos no disco: invalida o cache da tela Arquivos (30 s) para ela já mostrá-los."""
+    fm = getattr(deps, "file_manager", None)
+    if fm is not None:
+        fm.invalidate()
 
 def _log_done(ctx: JobContext, report: dict, manifest: Manifest, seconds: float) -> None:
     """Sem trilha de auditoria no lite: fica o log, SÓ com contagens (nunca conteúdo nem nome)."""

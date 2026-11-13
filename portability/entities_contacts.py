@@ -35,6 +35,8 @@ from typing import Any, Iterator
 from sqlalchemy import and_, insert, or_, select, update
 from sqlalchemy.exc import IntegrityError, OperationalError
 
+from portability import avatars as avatars_io
+from portability import media as media_io
 from portability import registry as reg
 from portability.base import CREATE, ERROR, SKIP, UPDATE, Env, _is_text, MAX_PROMPT_BYTES
 
@@ -138,7 +140,9 @@ def export_contacts(env: Env) -> Iterator[dict]:
                     .order_by(observations.c.created_at, observations.c.id)):
                 obs.setdefault(o.contact_id, []).append({"text": o.text, "created_at": o.created_at})
         for r in rows:
+            avatar = avatars_io.plan_export(env, r["phone"])
             yield {"id": r["id"], "phone": r["phone"], **{f: r[f] or "" for f in _CONTACT_TEXT},
+                   **({"avatar_file": avatar} if avatar else {}),
                    "ai_enabled": bool(r["ai_enabled"]), "ai_disabled_at": r["ai_disabled_at"],
                    "is_group": bool(r["is_group"]), "is_archived": bool(r["is_archived"]),
                    "is_pinned": bool(r["is_pinned"]), "can_send": bool(r["can_send"]),
@@ -173,6 +177,7 @@ def _parse_contact(row: dict) -> dict:
         "is_pinned": _flag(row.get("is_pinned")), "can_send": _flag(row.get("can_send"), 1),
         "tags": _str_items(row.get("tags"), MAX_TAGS, 30), "observations": obs,
         "created_at": created, "updated_at": _num(row.get("updated_at")) or created,
+        "avatar_file": row.get("avatar_file") if isinstance(row.get("avatar_file"), str) else None,
     }
 
 def _tag_exists(env: Env, name: str) -> bool:
@@ -227,6 +232,7 @@ def apply_contact(row: dict, strategy: str, env: Env, dry_run: bool) -> str:
                 seen[v] = cid
             if c["src"] is not None:
                 env.contact_map[c["src"]] = cid
+            _import_avatar(env, c, phone, replace=False, dry_run=dry_run)
             env.mark("contacts", phone)
             return CREATE
 
@@ -235,8 +241,13 @@ def apply_contact(row: dict, strategy: str, env: Env, dry_run: bool) -> str:
         seen[v] = cid
     if c["src"] is not None:
         env.contact_map[c["src"]] = cid
+    # A foto vem ANTES do retorno do ``skip``: foto ausente no destino é preenchida mesmo em "só adicionar
+    # o que falta"; só ``overwrite`` troca uma existente. Usa o telefone do contato do DESTINO (a variante
+    # BR pode diferir do que veio no pacote).
+    avatar_changed = _import_avatar(env, c, existing.get("phone") or phone,
+                                    replace=strategy == reg.OVERWRITE, dry_run=dry_run)
     if strategy == reg.SKIP:
-        return SKIP
+        return UPDATE if avatar_changed else SKIP
 
     changes: dict[str, Any] = {}
     if strategy == reg.MERGE:
@@ -261,7 +272,7 @@ def apply_contact(row: dict, strategy: str, env: Env, dry_run: bool) -> str:
             select(observations.c.text).where(observations.c.contact_id == cid))}
     new_obs = [o for o in c["observations"] if o["text"] not in have_obs]
     if not (changes or new_tags or drop_tags or new_obs):
-        return SKIP
+        return UPDATE if avatar_changed else SKIP
     if not dry_run:
         if changes:
             _update_contact(cid, changes)
@@ -271,6 +282,16 @@ def apply_contact(row: dict, strategy: str, env: Env, dry_run: bool) -> str:
             _add_links(cid, new_tags, new_obs, have_obs)
         _bump(env, "contacts_changed")
     return UPDATE
+
+def _import_avatar(env: Env, c: dict, dest_phone: str, *, replace: bool, dry_run: bool) -> bool:
+    """Foto do contato. Falha nunca derruba a linha (vira o aviso ``avatar_failed``)."""
+    if not c.get("avatar_file"):
+        return False
+    try:
+        return avatars_io.restore(env, c["avatar_file"], dest_phone, replace=replace, dry_run=dry_run)
+    except Exception:  # noqa: BLE001
+        env.warn("contacts", "*", "avatar_failed")
+        return False
 
 def _create_contact(c: dict) -> int | None:
     """Insere o contato SEM ``contact_repo.get_or_create``: ele carimba ``updated_at`` com agora e a
@@ -352,9 +373,12 @@ def export_messages(env: Env) -> Iterator[dict]:
 def _export_message_row(env: Env, contact_id: int, r) -> dict:
     path = r["media_path"]
     geo = path if isinstance(path, str) and _GEO_RE.match(path) else None
+    extra = media_io.plan_export(env, path, r["ts"]) if path and geo is None else None
     return {
+        **(extra or {}),
         "contact": contact_id, "role": r["role"], "content": r["content"], "ts": r["ts"],
-        # o caminho de disco da ORIGEM nunca viaja: só se sabe SE havia arquivo (``has_file``)
+        # o caminho de disco da ORIGEM nunca viaja: o arquivo vai pelo nome de pacote (``media_file``)
+        # e ganha caminho novo no destino; ``has_file`` só diz que ELE existia na origem
         "media_type": r["media_type"], "media_geo": geo,
         "has_file": bool(path) and geo is None,
         "media_state": r["media_state"], "media_name": r["media_name"],
@@ -417,19 +441,23 @@ def _existing_counter(contact_id: int) -> Counter:
 def _resolve_media(env: Env, msg: dict, dry_run: bool) -> tuple[str | None, str | None]:
     """``(media_path, media_state)`` que a mensagem terá no destino.
 
-    ``media_path`` do pacote NUNCA é confiado (é caminho vindo de fora): só localização (``geo:``, que
-    é o dado e passa por regex) ou um arquivo que ESTE import copiou com nome novo. Mensagem que tinha
-    arquivo na origem e não o traz vira "Arquivo removido" — e o texto fica. Enquete, contato, pedido
-    (``media_type`` sem arquivo) NÃO são mídia perdida."""
+    ``media_path`` do pacote NUNCA é confiado (é caminho vindo de fora): só localização (``geo:``, que é
+    o dado e passa por regex) ou um arquivo que ESTE import copiou com nome novo (``media_io.restore``).
+    Mensagem que tinha arquivo na origem e não o traz vira "Arquivo removido" — e o texto fica. Enquete,
+    contato, pedido (``media_type`` sem arquivo) NÃO são mídia perdida."""
     if not msg["media_type"]:
         return None, None
     if msg["media_geo"]:
         return msg["media_geo"], None
     if msg["media_state"] in ("discarded", "removed"):
         return None, msg["media_state"]
-    if not msg["has_file"]:
+    if not msg["has_file"] and not msg["media_file"]:
         return None, None
-    env.warn("messages", "*", "media_not_included")
+    verdict, path = media_io.restore(env, msg["media_file"], msg["media_root"], dry_run)
+    if verdict == "ok":
+        return path, None
+    if verdict == "absent":
+        env.warn("messages", "*", "media_not_included")
     return None, "removed"
 
 def apply_message(row: dict, strategy: str, env: Env, dry_run: bool) -> str:
@@ -506,3 +534,4 @@ def _flush_messages(env: Env, dry_run: bool = False) -> None:
                 env.error_sink.add("messages", row_index, "row_failed",
                                    {"key": f"contato #{values.get('contact_id') or '?'}",
                                     "reason": "row_failed"})
+            media_io.discard_if_unreferenced(values.get("media_path"))
