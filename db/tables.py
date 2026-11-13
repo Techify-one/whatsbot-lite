@@ -389,6 +389,54 @@ ai_tools_history = Table(
 Index("idx_ai_tools_hist", ai_tools_history.c.name, ai_tools_history.c.version)
 
 
+# --- Importar/Exportar (portability/) -------------------------------------------------------------
+# Estado do job em TABELA, nunca em memória: o processo reinicia a qualquer momento (toggle de plugin,
+# self-update) e o job precisa sobreviver. JSON como Text (como ``messages.reactions``) para o mesmo
+# código rodar em SQLite e Postgres; o que o worker CONSULTA é coluna real (afinidade, hash, etc.).
+portability_jobs = Table(
+    "portability_jobs",
+    metadata,
+    Column("id", Text, primary_key=True),
+    Column("kind", Text, nullable=False),
+    Column("state", Text, nullable=False, server_default="queued"),
+    Column("progress", Text, nullable=False, server_default="{}"),
+    Column("params", Text, nullable=False, server_default="{}"),
+    Column("report", Text, nullable=False, server_default="{}"),
+    Column("error", Text),
+    Column("package_path", Text),
+    Column("package_sha256", Text),
+    Column("source_job", Text),
+    Column("affinity", Text),
+    Column("resume_stage", Text),
+    Column("interrupted", Integer, nullable=False, server_default="0"),
+    Column("recoveries", Integer, nullable=False, server_default="0"),
+    Column("created_at", Float, nullable=False),
+    Column("started_at", Float),
+    Column("finished_at", Float),
+    Column("expires_at", Float),
+    Column("heartbeat_at", Float),
+    Column("cancel_requested", Integer, nullable=False, server_default="0"),
+    Column("worker_id", Text),
+)
+Index("idx_portability_jobs_state", portability_jobs.c.state, portability_jobs.c.created_at)
+Index("idx_portability_jobs_source", portability_jobs.c.source_job)
+Index("idx_portability_jobs_sha", portability_jobs.c.package_sha256)
+
+portability_job_errors = Table(
+    "portability_job_errors",
+    metadata,
+    Column("id", Integer, primary_key=True, autoincrement=True),
+    Column("job_id", Text, ForeignKey("portability_jobs.id", ondelete="CASCADE"), nullable=False),
+    Column("entity", Text, nullable=False),
+    Column("row_index", Integer),
+    Column("code", Text, nullable=False),
+    Column("detail", Text, nullable=False, server_default="{}"),
+    Column("created_at", Float, nullable=False),
+)
+Index("idx_portability_errors_job", portability_job_errors.c.job_id, portability_job_errors.c.entity,
+      portability_job_errors.c.id)
+
+
 # Set of core table names — used by the SQLite → Postgres migration helper to
 # distinguish what belongs to the app vs. plugin-owned tables.
 CORE_TABLES = frozenset(t.name for t in metadata.sorted_tables)
