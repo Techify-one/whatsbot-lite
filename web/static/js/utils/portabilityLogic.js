@@ -15,6 +15,8 @@ export const SCOPES = [
     hint: 'As tags (nome e cor) para organizar os contatos.' },
   { id: 'conversations', label: 'Contatos e conversas',
     hint: 'Contatos, observações, tags de cada contato e todo o histórico de mensagens (inclusive notas privadas). É o que os clientes escreveram: guarde o pacote com cuidado.' },
+  { id: 'plugins', label: 'Plugins',
+    hint: 'O código dos plugins que você escolher, a configuração e os dados deles. Ao importar, o plugin chega desligado e pede a sua confirmação: ele é código que passa a rodar neste servidor.' },
   { id: 'agents', label: 'Agentes de IA',
     hint: 'Agentes, prompts, variáveis, ajustes de ferramentas e as ferramentas com código. O código das ferramentas é Python: ao importar, elas chegam desligadas e pedem a sua confirmação.' },
 ];
@@ -31,6 +33,9 @@ export const ENTITY_LABELS = {
   ai_agents: 'Agentes de IA',
   ai_tools: 'Ferramentas com código',
   tool_overrides: 'Ajustes de ferramentas',
+  plugins: 'Plugins (código)',
+  plugin_config: 'Configuração dos plugins',
+  plugin_data: 'Dados dos plugins',
 };
 
 /** Os valores internos (`skip`/`merge`/`overwrite`) não mudam — só o texto. "Manter o que já existe" era lido
@@ -75,6 +80,27 @@ export const WARNING_LABELS = {
   tool_code_not_accepted: 'O pacote traz código de ferramenta e a confirmação não foi dada — nada foi gravado.',
   tool_has_dependencies: 'A ferramenta pede pacotes pip: eles serão instalados quando você a ligar e reiniciar.',
   override_tool_unknown: 'Ajuste de uma ferramenta que não está registrada aqui (plugin ausente?) — pulado.',
+  plugin_code_unavailable: 'O pacote não traz o código deste plugin — ele não foi instalado.',
+  plugin_package_invalid: 'O .zip do plugin é inseguro, grande demais ou o manifest não confere — o plugin não foi instalado.',
+  plugin_api_incompatible: 'O plugin pede uma versão da API que esta instalação não tem — não foi instalado.',
+  plugin_downgrade_skipped: 'O pacote traz uma versão MENOR do plugin do que a instalada aqui — a versão daqui foi mantida.',
+  plugin_orphan_dir: 'Já existe uma pasta com o nome deste plugin, sem registro — por segurança nada foi trocado.',
+  plugin_has_dependencies: 'O plugin pede pacotes pip: eles serão instalados quando você ativá-lo.',
+  plugin_installed_disabled: 'Plugin instalado DESLIGADO. Leia o que ele faz e ative-o manualmente se confiar nele.',
+  plugin_replaced_disabled: 'Plugin ATUALIZADO pelo do pacote e DESLIGADO — ative-o de novo quando quiser usá-lo.',
+  plugin_code_not_accepted: 'O pacote traz código de plugin e a confirmação não foi dada — nada foi gravado.',
+  plugin_unknown: 'Plugin que não está instalado aqui nem veio no pacote — pulado.',
+  plugin_data_pending: 'Os dados do plugin esperam: ative o plugin, reinicie o servidor e clique em Continuar.',
+  plugin_table_unknown: 'O plugin não tem esta tabela (outra versão, ou nome forjado) — pulada.',
+  plugin_table_not_empty: 'A tabela do plugin aqui já tem dados — foi pulada inteira para não misturar.',
+  plugin_row_id_conflict: 'Linha de plugin com número já ocupado aqui — ficou a do destino.',
+  plugin_table_failed: 'A tabela do plugin falhou e nada dela foi gravado.',
+  plugin_table_truncated: 'Tabela de plugin grande demais: só as primeiras linhas foram para o pacote.',
+  plugin_blob_dropped: 'Coluna binária de plugin não viaja — ficou vazia.',
+  environment_value_dropped: 'Configuração de plugin que aponta para a própria máquina (localhost) — não foi levada.',
+  secret_dropped: 'Coluna secreta de uma linha de plugin sem chave primária — não pôde ser cifrada e foi omitida.',
+  reference_cleared: 'A linha de plugin apontava para um contato que não existe aqui — ficou sem vínculo.',
+  reference_missing: 'A linha de plugin apontava para um contato que não existe aqui — foi ignorada.',
   media_not_included: 'O pacote não traz o arquivo de algumas mensagens — entram só com o texto.',
   media_missing: 'O arquivo da mídia não existe mais no disco — a mensagem vai só com o texto.',
   media_out_of_period: 'Mídia fora do período escolhido — a mensagem vai só com o texto.',
@@ -109,9 +135,11 @@ const STATE_LABELS = {
   awaiting_restart: 'Aguardando',
 };
 const INTERRUPTED_LABEL = 'Interrompido — pode continuar';
+const WAITING_PLUGINS_LABEL = 'Esperando o plugin ser ativado';
 
 export function stateLabel(state, job) {
   if (job && job.interrupted && state === 'awaiting_restart') return INTERRUPTED_LABEL;
+  if (job && job.resume_stage === 'plugins' && state === 'awaiting_restart') return WAITING_PLUGINS_LABEL;
   return STATE_LABELS[state] || String(state || '');
 }
 
@@ -194,12 +222,17 @@ export function dayEnd(value) {
 /** Corpo de POST /exports, ou `{error}`. Nunca monta `password` sem segredos. */
 export function buildExportRequest({
   scopes, includeSecrets, password, confirm, includeMedia = false, mediaFrom = '', mediaTo = '',
-  includeAvatars = false,
+  includeAvatars = false, pluginIds = [],
 }) {
   if (!Array.isArray(scopes) || scopes.length === 0) {
     return { error: 'Escolha ao menos uma coisa para exportar.' };
   }
   const body = { scopes, include_secrets: !!includeSecrets };
+  if (scopes.includes('plugins')) {
+    const ids = Array.isArray(pluginIds) ? pluginIds.filter((i) => typeof i === 'string' && i) : [];
+    if (!ids.length) return { error: 'Marque ao menos um plugin para exportar.' };
+    body.plugin_ids = ids;
+  }
   // Fotos: DESLIGADAS por padrão no Lite (o cache se refaz sozinho), então só o "ligar" vai no corpo.
   if (scopes.includes('conversations') && includeAvatars) body.include_avatars = true;
   if (includeMedia) {
@@ -238,6 +271,31 @@ export function exportSummary(report) {
 /** O servidor perdeu este import no meio (reinício)? O que já entrou fica; "Continuar" refaz o resto. */
 export function isInterrupted(job) {
   return !!job && job.state === 'awaiting_restart' && job.interrupted === true;
+}
+
+/** Há o botão "Continuar" (interrompido pelo reinício OU esperando a 2ª etapa dos plugins)? */
+export function canContinue(job) {
+  return isInterrupted(job) || isWaitingPlugins(job);
+}
+
+/** O import espera a 2ª etapa dos plugins (ativar o plugin, reiniciar e continuar)? */
+export function isWaitingPlugins(job) {
+  return !!job && job.state === 'awaiting_restart' && job.resume_stage === 'plugins' && !job.interrupted;
+}
+
+/** Plugins cujas tabelas ainda esperam: `['demo', ...]` (sem repetir), vindos do relatório do job. */
+export function pendingPlugins(job) {
+  const list = (job && job.report && job.report.pending_plugin_data) || [];
+  return [...new Set((Array.isArray(list) ? list : []).map((t) => String(t).split('/')[0]))].sort();
+}
+
+/** Texto da espera. Não é falha: o que já entrou fica, e os dados esperam o plugin existir. */
+export function waitingPluginsText(job) {
+  const names = pendingPlugins(job);
+  const who = names.length ? ` (${names.join(', ')})` : '';
+  return 'A primeira etapa terminou, mas os dados de plugin ainda não podem entrar: a tabela só existe depois de '
+    + `o plugin ser ativado e o servidor reiniciar${who}. Ative o plugin na aba Plugins, aguarde o servidor `
+    + 'reiniciar e volte aqui para continuar. O que já entrou fica e nada será duplicado.';
 }
 
 /** Texto do import interrompido. Não é falha: nada do que entrou se perde nem duplica. */
@@ -347,6 +405,30 @@ export function codeToolsTotal(report) {
   return (report && report.code_tools_total) | 0;
 }
 
+/** Quantos plugins COM CÓDIGO o pacote traz. */
+export function codePluginsTotal(report) {
+  return (report && report.code_plugins_total) | 0;
+}
+
+/** O pacote traz código de qualquer tipo (ferramenta de IA ou plugin)? É o que exige a confirmação. */
+export function codeTotal(report) {
+  return codeToolsTotal(report) + codePluginsTotal(report);
+}
+
+/** Lista de plugins para o popup: `[{id, text}]`. */
+export function codePluginRows(report) {
+  const list = (report && Array.isArray(report.code_plugins)) ? report.code_plugins : [];
+  const TEXT = {
+    new: 'novo (chega desligado)', newer: 'versão maior que a instalada', same: 'mesma versão da instalada',
+    older: 'versão menor que a instalada (não rebaixa)', orphan: 'pasta sem registro (não é trocado)',
+  };
+  return list.map((p) => ({
+    id: String(p.id),
+    text: `${TEXT[p.state] || 'novo (chega desligado)'}${p.version ? ` · v${p.version}` : ''}`
+      + `${p.dependencies ? ' · pede pacotes pip' : ''}`,
+  }));
+}
+
 /** Lista para o popup: `[{name, text}]`. */
 export function codeToolRows(report) {
   const list = (report && Array.isArray(report.code_tools)) ? report.code_tools : [];
@@ -365,8 +447,8 @@ export function buildConfirmRequest({ report, strategy, password, overwriteSecre
   if (password) body.password = password;
   if (overwriteSecrets) body.overwrite_secrets = true;
   // Pacote com código de ferramenta: a confirmação é separada e o servidor também a exige.
-  if (codeToolsTotal(report) > 0) {
-    if (!acceptCode) return { error: 'Este pacote traz código de ferramentas de IA: marque que você revisou a lista.' };
+  if (codeTotal(report) > 0) {
+    if (!acceptCode) return { error: 'Este pacote traz código (ferramentas de IA ou plugins): marque que você revisou a lista.' };
     body.accept_code = true;
   }
   return { body };

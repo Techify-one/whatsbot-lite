@@ -5,9 +5,9 @@
 // estado do formulário, e é apagada assim que o job é criado.
 
 import { h } from 'preact';
-import { useState } from 'preact/hooks';
+import { useEffect, useState } from 'preact/hooks';
 import htm from 'htm';
-import { createExport, downloadExport } from '../../services/portabilityApi.js';
+import { createExport, downloadExport, listInstalledPlugins } from '../../services/portabilityApi.js';
 import {
   MIN_PASSWORD_LEN, SCOPES, buildExportRequest, exportSummary, formatBytes, isPasswordRequired,
 } from '../../utils/portabilityLogic.js';
@@ -29,6 +29,17 @@ export function ExportWizard({ onChanged, onPasswordRequired }) {
   const [jobId, setJobId] = useState('');
   const [result, setResult] = useState(null);
   const [downloading, setDownloading] = useState(false);
+  const [plugins, setPlugins] = useState(null);          // null = ainda não carregou
+  const [pluginIds, setPluginIds] = useState([]);
+
+  // A lista de plugins só é buscada quando o escopo "Plugins" é marcado.
+  useEffect(() => {
+    if (!scopes.includes('plugins') || plugins !== null) return;
+    let alive = true;
+    listInstalledPlugins().then((res) => { if (alive) setPlugins(res && res.ok ? res.data : []); });
+    return () => { alive = false; };
+  }, [scopes, plugins]);
+  const togglePlugin = (id) => setPluginIds((cur) => (cur.includes(id) ? cur.filter((i) => i !== id) : [...cur, id]));
 
   const toggle = (id) => setScopes((cur) => (cur.includes(id) ? cur.filter((s) => s !== id) : [...cur, id]));
 
@@ -38,7 +49,7 @@ export function ExportWizard({ onChanged, onPasswordRequired }) {
     const req = buildExportRequest({
       scopes, includeSecrets: withSecrets, password, confirm,
       includeMedia: withMedia && scopes.includes('conversations'), mediaFrom, mediaTo,
-      includeAvatars: withAvatars,
+      includeAvatars: withAvatars, pluginIds,
     });
     if (req.error) { setError(req.error); return; }
     setBusy(true);
@@ -117,6 +128,26 @@ export function ExportWizard({ onChanged, onPasswordRequired }) {
                 </span>
               </label>`)}
           </fieldset>
+
+          ${scopes.includes('plugins') ? html`
+            <div class="rounded-lg border border-wa-border bg-wa-panel p-3 flex flex-col gap-2">
+              <span class="text-sm font-medium text-wa-text">Quais plugins levar</span>
+              ${plugins === null ? html`<span class="text-[12px] text-wa-secondary">Carregando…</span>` : null}
+              ${plugins && !plugins.length ? html`
+                <span class="text-[12px] text-wa-secondary">Nenhum plugin instalado nesta instalação.</span>` : null}
+              ${(plugins || []).map((p) => html`
+                <label key=${p.id} class="flex items-start gap-3 cursor-pointer">
+                  <input type="checkbox" class="mt-1" checked=${pluginIds.includes(p.id)} onChange=${() => togglePlugin(p.id)} />
+                  <span class="min-w-0">
+                    <span class="block text-sm text-wa-text">${p.name}${p.version ? ` · v${p.version}` : ''}</span>
+                    <span class="block text-[12px] text-wa-secondary">${p.enabled ? 'Ativo' : 'Desativado'} · ${p.id}</span>
+                  </span>
+                </label>`)}
+              <p class="text-[12px] text-wa-secondary">
+                Vai o código do plugin, a configuração e os dados dele. Os dados só entram no destino depois de o
+                plugin ser ativado lá.
+              </p>
+            </div>` : null}
 
           ${scopes.includes('conversations') ? html`
             <div class="rounded-lg border border-wa-border bg-wa-panel p-3 flex flex-col gap-3">

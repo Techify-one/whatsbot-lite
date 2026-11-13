@@ -18,6 +18,7 @@ import hashlib
 import json
 import logging
 import os
+import shutil
 import time
 from typing import Any, Iterator
 
@@ -27,13 +28,14 @@ from portability import avatars as avatars_io
 from portability import crypto
 from portability import entities as ents
 from portability import entities_ai as _ai
+from portability import plugins_io as _plugins
 from portability import jobs
 from portability import media as media_io
 from portability import registry as reg
 from portability.base import mask_phone
 from portability.format import (SECRETS_NAME, Manifest, PackageError, PackageReader,
-                                PackageWriter, entity_path)
-from portability.jobs import JobContext, JobFailed
+                                PackageWriter, entity_path, plugin_code_path)
+from portability.jobs import JobContext, JobFailed, JobPaused, State
 
 logger = logging.getLogger(__name__)
 
@@ -47,7 +49,12 @@ _PERSONAL_ENTITIES = frozenset({"contacts", "messages"})
 #: Ordem GLOBAL de import (dependências primeiro): config e tags antes de contatos; a mensagem aponta
 #: para o contato do pacote, então vem depois dele. É um subconjunto do que o pacote traz.
 IMPORT_ORDER = ("config", "tags", "contacts", "messages", "ai_variables", "ai_prompts", "ai_tools",
-                "ai_agents", "tool_overrides")
+                "ai_agents", "tool_overrides", "plugins", "plugin_config")
+
+#: ``plugin_data`` não é uma ``Entity`` (são várias tabelas dinâmicas, em 2 etapas): roda DEPOIS de todas.
+PLUGIN_DATA = "plugin_data"
+#: ``resume_stage`` da 2ª etapa: os dados de plugin que esperavam o plugin ser ativado e o servidor reiniciar.
+STAGE_PLUGINS = "plugins"
 
 # ── helpers ─────────────────────────────────────────────────────────────────
 
@@ -147,7 +154,7 @@ def run_export(ctx: JobContext) -> dict:
             crypto.check_password(password or "")
         except crypto.WeakPasswordError as exc:
             raise JobFailed(str(exc)) from None
-    names = [e for e in IMPORT_ORDER if e in reg.entities_for(scopes)]
+    names = [e for e in IMPORT_ORDER if e in reg.entities_for(scopes) and e in ents.ENTITIES]
     try:
         media_cfg = media_io.parse_params(params, scopes)
     except ValueError as exc:
@@ -156,7 +163,15 @@ def run_export(ctx: JobContext) -> dict:
     env.avatars = avatars_io.parse_params(params, scopes)
     if media_cfg:
         env.media = {"enabled": True, "from": media_cfg["media_from"], "to": media_cfg["media_to"]}
+    if "plugins" in scopes:
+        ids = params.get("plugin_ids")
+        have = set(_plugins.installed_ids())
+        if (not isinstance(ids, list) or not ids or not all(isinstance(i, str) and i in have for i in ids)):
+            raise JobFailed("Escolha ao menos um plugin instalado para exportar.")
+        env.plugin_ids = list(dict.fromkeys(ids))
     job_dir = _job_dir(ctx)
+    if env.plugin_ids:
+        env.plugin_tmp = os.path.join(job_dir, "plugin_zips")
     part = os.path.join(job_dir, "package.zip.part")
     final = os.path.join(job_dir, "package.zip")
     counts: dict[str, int] = {}
@@ -171,6 +186,13 @@ def run_export(ctx: JobContext) -> dict:
             for name in names:
                 w.write_ndjson(name, _metered(
                     ctx, "export", name, ents.entity(name).export(env), counts))
+            for pid, zpath in env.plugin_zips.items():
+                # O código do plugin entra como veio do disco (já é .zip: sem comprimir de novo).
+                w.copy_file(plugin_code_path(pid), zpath, stored=True)
+            if env.plugin_ids:
+                counts[PLUGIN_DATA] = _plugins.export_data(
+                    w, env, lambda n: (ctx.check_cancel(), ctx.progress(
+                        stage="export", entity=PLUGIN_DATA, done=n)))
             if env.media_wanted:
                 # Depois das mensagens: o zipfile não aceita dois fluxos de escrita abertos ao mesmo
                 # tempo, e só ao fim se sabe quais arquivos as linhas pediram.
@@ -190,7 +212,10 @@ def run_export(ctx: JobContext) -> dict:
                 w.write_bytes(SECRETS_NAME, blob)
                 manifest.secrets = {"present": True, "kdf": "scrypt", "cipher": "aes-256-gcm"}
             manifest.counts = dict(counts)
+            manifest.plugins = list(env.cache.get("exported_plugins") or [])
             w.finish(manifest)
+        if env.plugin_tmp:
+            shutil.rmtree(env.plugin_tmp, ignore_errors=True)       # os zips já estão dentro do pacote
         os.replace(part, final)
     except BaseException:
         _rm_quiet(job_dir)           # nada de pacote pela metade (nem a senha) — o erro segue ao runner
@@ -198,6 +223,7 @@ def run_export(ctx: JobContext) -> dict:
     ctx.set_package(final)
     return {"counts": counts, "scopes": scopes, "secrets_included": bool(env.secrets),
             "media_included": bool(media_cfg), "avatars_included": bool(counts.get("avatars")),
+            "plugins": [p["id"] for p in env.cache.get("exported_plugins") or []],
             "bytes": os.path.getsize(final), "warnings": summarize_warnings(env.warnings)}
 
 # ═══ leitura do pacote ══════════════════════════════════════════════════════
@@ -243,6 +269,23 @@ def _present_entities(reader: PackageReader) -> list[str]:
     desconhecido é ignorado (pacote de uma versão mais nova que acrescentou entidade)."""
     have = set(reader.names())
     return [n for n in IMPORT_ORDER if n in ents.ENTITIES and entity_path(n) in have]
+
+def _with_plugin_data(reader: PackageReader, names: list[str]) -> list[str]:
+    """``plugin_data`` entra na lista de estratégias (e no relatório) quando o pacote traz tabelas."""
+    return [*names, PLUGIN_DATA] if _plugins.has_plugin_data(reader) else list(names)
+
+def _run_plugin_data(ctx: JobContext, reader: PackageReader, env: ents.Env, strategy: dict[str, str],
+                     dry_run: bool, only: set[str] | None = None) -> tuple[dict, list[str]]:
+    """Etapa dos DADOS de plugin: roda depois de todas as entidades (a tabela do plugin só existe depois
+    de ele ser ativado e o servidor reiniciar; o que ainda não existe fica ``pendente``)."""
+    stage = "dryrun" if dry_run else "import"
+
+    def tick(n: int) -> None:
+        ctx.check_cancel()
+        ctx.progress(stage=stage, entity=PLUGIN_DATA, done=n)
+
+    return _plugins.import_data(reader, env, strategy.get(PLUGIN_DATA, reg.SKIP), dry_run, tick,
+                                env.error_sink, only=only)
 
 def _manifest_view(m: Manifest, secrets_state: str) -> dict:
     return {"schema_version": m.schema_version, "app_version": m.app_version,
@@ -317,11 +360,15 @@ def run_dryrun(ctx: JobContext) -> dict:
         if not names:
             raise JobFailed("O pacote não traz nenhuma entidade que esta versão saiba importar.")
         # "Recalcular prévia" grava a escolha do operador em ``params.strategy``; sem ela vale o padrão.
-        strategy = _chosen_strategy(ctx.params.get("strategy"), names)
+        all_names = _with_plugin_data(reader, names)
+        strategy = _chosen_strategy(ctx.params.get("strategy"), all_names)
         jobs.clear_errors(ctx.id)
         env.error_sink = jobs.ErrorSink(ctx.id)
+        pending: list[str] = []
         try:
             tallies = _run_entities(ctx, reader, names, env, strategy, dry_run=True)
+            if PLUGIN_DATA in all_names:
+                tallies[PLUGIN_DATA], pending = _run_plugin_data(ctx, reader, env, strategy, True)
         finally:
             env.error_sink.flush()
         head = _alembic_head()
@@ -333,39 +380,88 @@ def run_dryrun(ctx: JobContext) -> dict:
         return {
             "manifest": _manifest_view(m, secrets_state),
             "entities": tallies,
-            "default_strategy": {n: reg.default_strategy(n) for n in names},
+            "default_strategy": {n: reg.default_strategy(n) for n in all_names},
             "strategy": strategy,
             "errors": env.error_sink.summary(),
             "supported_strategies": {n: list(reg.SUPPORTED_STRATEGIES.get(n, (reg.SKIP,)))
-                                     for n in names},
+                                     for n in all_names},
+            "pending_plugin_data": pending,
             "warnings": summarize_warnings(env.warnings),
             "notes": notes,
             "already_imported": jobs.find_imported(ctx.params.get("package_sha256") or "") or None,
             **_ai.code_tools_report(env),
+            **_plugins.code_plugins_report(env),
         }
 
 # ═══ import ═════════════════════════════════════════════════════════════════
 
 def run_import(ctx: JobContext) -> dict:
+    if ctx.job.get("resume_stage") == STAGE_PLUGINS:
+        return _run_import_stage2(ctx)
     with _open_package(ctx) as reader:
         _check_integrity(reader)
         secrets, secrets_state = _load_secrets(ctx, reader)
         env = ents.Env(secrets=secrets, overwrite_secrets=bool(ctx.params.get("overwrite_secrets")),
                        accept_code=bool(ctx.params.get("accept_code")))
         names = _present_entities(reader)
-        strategy = _chosen_strategy(ctx.params.get("strategy"), names)
+        all_names = _with_plugin_data(reader, names)
+        strategy = _chosen_strategy(ctx.params.get("strategy"), all_names)
         jobs.clear_errors(ctx.id)
         env.error_sink = jobs.ErrorSink(ctx.id)
         started = time.time()
+        pending: list[str] = []
         try:
             tallies = _run_entities(ctx, reader, names, env, strategy, dry_run=False)
+            if PLUGIN_DATA in all_names:
+                tallies[PLUGIN_DATA], pending = _run_plugin_data(ctx, reader, env, strategy, False)
         finally:
             env.error_sink.flush()
         post = _postprocess(ctx, env)
         report = {"entities": tallies, "errors": env.error_sink.summary(), "strategy": strategy,
                   "secrets": secrets_state, "warnings": summarize_warnings(env.warnings),
-                  "post": post, **_ai.code_tools_report(env)}
+                  "post": post, **_ai.code_tools_report(env), **_plugins.code_plugins_report(env)}
         _log_done(ctx, report, reader.manifest, time.time() - started)
+        if pending:
+            # 2ª ETAPA: a tabela do plugin só existe depois de ele ser ATIVADO e o servidor reiniciar (as
+            # migrations rodam no boot). O que já entrou fica; o resto espera o operador.
+            report["pending_plugin_data"] = pending
+            raise JobPaused(State.AWAITING_RESTART, STAGE_PLUGINS, report=report)
+        return report
+
+def _run_import_stage2(ctx: JobContext) -> dict:
+    """Retomada manual: importa os dados dos plugins que já foram ativados (a tabela existe agora).
+
+    Só mexe em ``plugin_data``: o resto do pacote já entrou na 1ª etapa. Os números e avisos da 1ª etapa
+    vêm do relatório do job e são preservados; os de ``plugin_data`` são refeitos. Ainda sobrando tabela
+    sem plugin ativado, o job volta a esperar — o operador pode clicar de novo quando ativar."""
+    prev = ctx.job.get("report") or {}
+    only = {t for t in (prev.get("pending_plugin_data") or []) if isinstance(t, str)}
+    with _open_package(ctx) as reader:
+        _check_integrity(reader)
+        secrets, secrets_state = _load_secrets(ctx, reader)
+        env = ents.Env(secrets=secrets, overwrite_secrets=bool(ctx.params.get("overwrite_secrets")))
+        names = _present_entities(reader)
+        strategy = _chosen_strategy(ctx.params.get("strategy"), _with_plugin_data(reader, names))
+        jobs.clear_errors(ctx.id, [PLUGIN_DATA])
+        prev_totals = {e: v.get("total", 0) for e, v in (prev.get("errors") or {}).items()
+                       if e != PLUGIN_DATA and isinstance(v, dict)}
+        env.error_sink = jobs.ErrorSink(ctx.id, seed=jobs.stored_error_counts(ctx.id),
+                                        seed_totals=prev_totals)
+        try:
+            tally, pending = _run_plugin_data(ctx, reader, env, strategy, False, only=only or None)
+        finally:
+            env.error_sink.flush()
+        entities = dict(prev.get("entities") or {})
+        entities[PLUGIN_DATA] = tally
+        warnings = {e: v for e, v in (prev.get("warnings") or {}).items() if e != PLUGIN_DATA}
+        warnings.update({e: v for e, v in summarize_warnings(env.warnings).items()})
+        report = {**prev, "entities": entities, "warnings": warnings, "secrets": secrets_state,
+                  "errors": env.error_sink.summary(), "post": _postprocess(ctx, env)}
+        _log_done(ctx, report, reader.manifest, 0.0)
+        report["pending_plugin_data"] = pending
+        if pending:
+            raise JobPaused(State.AWAITING_RESTART, STAGE_PLUGINS, report=report)
+        report.pop("pending_plugin_data", None)
         return report
 
 def _postprocess(ctx: JobContext, env: ents.Env) -> dict:

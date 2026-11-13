@@ -27,7 +27,7 @@ import uuid
 from fastapi import File, Form, Request, UploadFile
 from fastapi.responses import FileResponse, JSONResponse
 
-from portability import avatars as avatars_io, crypto, jobs, media as media_io, registry as reg
+from portability import avatars as avatars_io, crypto, jobs, media as media_io, plugins_io, registry as reg
 from portability.format import PackageError, inspect_zip, sha256_file
 from server.auth import auth_required
 from server.helpers import _err, _ok
@@ -153,6 +153,13 @@ def register_routes(app, deps):
         except ValueError as exc:
             return _err(str(exc))
         params = {"scopes": scopes, "include_secrets": include_secrets, **media}
+        if "plugins" in scopes:
+            ids = body.get("plugin_ids")
+            have = set(await asyncio.to_thread(plugins_io.installed_ids))
+            if (not isinstance(ids, list) or not ids or len(ids) > 200
+                    or not all(isinstance(i, str) and i in have for i in ids)):
+                return _err("Escolha ao menos um plugin instalado para exportar.")
+            params["plugin_ids"] = list(dict.fromkeys(ids))
         if "conversations" in scopes:
             params["include_avatars"] = avatars_io.parse_params(body, scopes)
         job_id = str(uuid.uuid4())
@@ -280,9 +287,10 @@ def register_routes(app, deps):
             return _err("Confirme que revisou o que será importado.", 400, error_code="not_acknowledged")
         # Pacote que traz CÓDIGO (ferramentas de IA): confirmação própria, separada do "revisei". O servidor
         # a exige pelo que a verificação ACHOU no pacote, não pelo que a tela mandar.
-        if int(report.get("code_tools_total") or 0) > 0 and not _truthy(body.get("accept_code")):
-            return _err("Este pacote traz código de ferramentas de IA. Confirme que você revisou a lista.",
-                        400, error_code="code_not_accepted")
+        code_total = int(report.get("code_tools_total") or 0) + int(report.get("code_plugins_total") or 0)
+        if code_total > 0 and not _truthy(body.get("accept_code")):
+            return _err("Este pacote traz código (ferramentas de IA ou plugins). Confirme que você revisou "
+                        "a lista.", 400, error_code="code_not_accepted")
         params = {"strategy": strategy, "package_path": dry["package_path"],
                   "overwrite_secrets": _truthy(body.get("overwrite_secrets")),
                   "accept_code": _truthy(body.get("accept_code")),
@@ -357,7 +365,11 @@ def register_routes(app, deps):
         job = await asyncio.to_thread(jobs.get, job_id)
         if job is None or job["kind"] != "import":
             return _err("Job não encontrado.", 404)
-        if job["state"] != jobs.State.AWAITING_RESTART or not job.get("interrupted"):
+        # Dois motivos para esperar: o servidor reiniciou no meio (``interrupted``) ou a 2ª etapa dos
+        # plugins (``resume_stage``): os dados só entram depois de o plugin ser ativado e o servidor
+        # reiniciar. Os dois voltam pelo mesmo botão "Continuar".
+        if job["state"] != jobs.State.AWAITING_RESTART or not (
+                job.get("interrupted") or job.get("resume_stage")):
             return _err("Este import não está esperando para continuar.", 409)
         pkg = (job.get("params") or {}).get("package_path") or job.get("package_path")
         if not _package_ok(pkg):

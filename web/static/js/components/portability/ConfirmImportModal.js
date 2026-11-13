@@ -10,11 +10,12 @@ import { STRATEGY_LABELS } from '../../utils/portabilityLogic.js';
 const html = htm.bind(h);
 
 export function ConfirmImportModal({
-  overwrites = [], options = [], codeTools = [], stale = false, busy = false, onConfirm, onCancel,
+  overwrites = [], options = [], codeTools = [], codePlugins = [], stale = false, busy = false,
+  onConfirm, onCancel,
 }) {
   const [ack, setAck] = useState(false);
   const [codeAck, setCodeAck] = useState(false);
-  const needsCode = codeTools.length > 0;
+  const needsCode = codeTools.length > 0 || codePlugins.length > 0;
   useEffect(() => {
     const onKey = (e) => { if (e.key === 'Escape') onCancel(); };
     window.addEventListener('keydown', onKey);
@@ -48,13 +49,19 @@ export function ConfirmImportModal({
 
         ${needsCode ? html`
           <div class="rounded-md border border-red-500/40 bg-red-500/10 py-2 px-3" role="alert">
-            <p class="text-[13px] font-medium text-red-700">Este pacote traz CÓDIGO PYTHON de ferramentas de IA:</p>
-            <ul class="list-disc pl-5 mt-1">
-              ${codeTools.map((t) => html`<li key=${t.name} class="text-[13px] text-red-700"><strong>${t.name}</strong> — ${t.text}</li>`)}
-            </ul>
+            ${codeTools.length ? html`
+              <p class="text-[13px] font-medium text-red-700">Este pacote traz CÓDIGO PYTHON de ferramentas de IA:</p>
+              <ul class="list-disc pl-5 mt-1">
+                ${codeTools.map((t) => html`<li key=${t.name} class="text-[13px] text-red-700"><strong>${t.name}</strong> — ${t.text}</li>`)}
+              </ul>` : null}
+            ${codePlugins.length ? html`
+              <p class="text-[13px] font-medium text-red-700 ${codeTools.length ? 'mt-2' : ''}">Este pacote traz o CÓDIGO de plugins:</p>
+              <ul class="list-disc pl-5 mt-1">
+                ${codePlugins.map((p) => html`<li key=${p.id} class="text-[13px] text-red-700"><strong>${p.id}</strong> — ${p.text}</li>`)}
+              </ul>` : null}
             <p class="text-[12px] text-red-700 mt-1">
-              Elas chegam <strong>desligadas</strong> e nada roda agora. Só ligue uma depois de ler o código na tela de
-              ferramentas: ligada, ela roda com acesso total a este servidor a cada reinício.
+              Tudo chega <strong>desligado</strong> e nada roda agora. Só ative depois de saber o que faz: ligado, o código
+              roda com acesso total a este servidor a cada reinício.
             </p>
             <label class="flex items-start gap-2 text-[13px] text-red-700 mt-2 cursor-pointer">
               <input type="checkbox" class="mt-1" checked=${codeAck} onChange=${(e) => setCodeAck(e.target.checked)} />

@@ -20,7 +20,7 @@ mensagem clara. O Lite é menor, então o import/export também é:
 | conversa separada do contato | **não existe**: a conversa é implícita (`messages.contact_id`) |
 | protocolos, etiquetas, campos personalizados, respostas rápidas | **não existem**: só tags e observações |
 | agentes de IA, prompts, variáveis, ferramentas | **viajam** (escopo "Agentes de IA"; `ai_credentials` não existe no Lite) |
-| plugins | **fase seguinte** (ver "O que ainda não viaja") |
+| plugins | **viajam** (escopo "Plugins"; código desligado, config e dados em 2 etapas) |
 | Postgres apenas | **SQLite ou Postgres**: o motor de jobs é SQL portável |
 | reinício automático no meio do import | **não há**; só "Continuar" depois de uma interrupção |
 
@@ -32,6 +32,7 @@ mensagem clara. O Lite é menor, então o import/export também é:
 | Tags | `tags` | nome único + cor |
 | Contatos e conversas | `contacts`, `messages` | + observações, tags de cada contato, mídia e fotos (opcionais) |
 | Agentes de IA | `ai_variables`, `ai_prompts`, `ai_tools`, `ai_agents`, `tool_overrides` | ⚠️ `ai_tools` leva **código Python**: ver "Motor de IA" |
+| Plugins | `plugins` (código), `plugin_config`, `plugin_data` | ⚠️ código que roda no servidor, dados em 2 etapas: ver "Plugins" |
 
 ### Configuração: allowlist, nunca denylist
 
@@ -135,6 +136,76 @@ com `pip` no mesmo passo. Um pacote é dado não confiável, então:
 - **`tool_overrides`** (ferramenta desligada, renomeada ou redescrita) **nunca cria linha**: ela nasce quando a ferramenta
   é registrada no boot, e o boot apaga as órfãs. Ferramenta que não existe aqui (plugin ausente) é pulada com aviso.
 - Ordem de import: variáveis → prompts → ferramentas → agentes → ajustes (o agente confere a ferramenta que o pacote cria).
+
+## Plugins
+
+Três coisas, três riscos. O código está em [portability/plugins_io.py](../portability/plugins_io.py) e as barreiras de zip em
+[plugins/package.py](../plugins/package.py), que **o "Importar (.zip)" e o "Atualizar" da tela de plugins também usam**.
+
+### ⚠️ Código: roda no servidor
+
+Mesma regra das ferramentas de IA, com o que muda por ser uma pasta inteira de código:
+
+- o plugin **entra sempre desligado**, e o que já estava instalado e é **substituído também fica desligado** (trocar o
+  código de algo que roda não pode ser silencioso). Ativar é uma decisão manual, na aba Plugins;
+- só é gravado com **`accept_code`**: a rota exige quando `code_tools_total + code_plugins_total > 0` (pelo que o pacote
+  **carrega**, não pela estratégia escolhida) e o motor recusa de novo (aviso `plugin_code_not_accepted`);
+- `skip` é o padrão e **nunca** toca num plugin instalado. `overwrite` só atualiza para uma versão **maior** (nunca
+  rebaixa: `plugin_downgrade_skipped`) e uma pasta sem registro no banco é deixada como está (`plugin_orphan_dir`);
+- o manifest do zip é validado **antes** de tocar o disco: id do manifest = id do pacote, `version` semver e
+  `whatsbot_api_version` compatível com esta instalação;
+- **zip-slip e link simbólico** são recusados antes de extrair qualquer byte. **Zip-bomb**: o `file_size` do diretório
+  central é declarado pelo próprio arquivo, então a barreira de verdade **conta os bytes efetivamente descomprimidos**
+  (`safe_extract`: 128 MB por arquivo, 256 MB no total). A **prévia faz o ensaio** da extração (`safe_extract(zf, None)`
+  percorre e conta sem gravar), então recusa a mesma bomba que o import recusaria;
+- a extração acontece numa pasta de rascunho com `.` na frente (que o loader ignora) e só então vai ao lugar: falha no
+  meio nunca deixa um plugin pela metade.
+
+> **Correção que veio junto.** O "Importar (.zip)" da tela de plugins extraía com `extractall` e **sem teto**: um `.zip` de
+> ~300 KB virava 300 MB em disco. O "Atualizar" só conferia o tamanho *declarado*. Agora os dois usam o mesmo
+> `plugins/package.py`, e `tests/test_plugin_import_route.py` manda a bomba pela rota HTTP de verdade.
+
+O export zipa a pasta do plugin sem `__pycache__`, sem banco local (`.db`) e **sem seguir link simbólico**.
+
+### Configuração (`plugin.<id>.*`)
+
+Só de plugin que existe aqui (ou que o próprio pacote instala). Campo cujo **nome** indica credencial
+(`registry.is_secret_field`, a regra estreita: `token`, `senha`, `api_key`…) só viaja cifrado; **o nome decide, nunca a marca
+`secret` do pacote**. Valor que aponta para a própria máquina (`127.0.0.1`, `localhost`) não vai
+(`environment_value_dropped`). `skip` é o padrão: o valor que o operador já tem vale.
+
+### Dados (`plugin_<id>_*`) em duas etapas
+
+A tabela de um plugin só existe depois de ele ser **ativado** e o servidor **reiniciar** (as migrations rodam no boot), e
+nunca criamos tabela de plugin por conta própria: o schema é do plugin. Então:
+
+1. **1ª etapa**: entra tudo o que o destino já consegue receber (código, config, dados de plugin que já migrou). A
+   tabela que ainda não existe fica **pendente** (`plugin_data_pending`) e o job pausa em `awaiting_restart` com
+   `resume_stage='plugins'`. Não é falha nem interrupção.
+2. O operador **ativa o plugin**, espera o servidor reiniciar e clica em **Continuar importação**. A 2ª etapa só mexe em
+   `plugin_data` e preserva os números da 1ª. Se ainda sobrar tabela sem plugin ativo, o job volta a esperar.
+
+O Lite **não** reinicia sozinho no meio do import (o `plugins/restart.py` não tem `is_supervised()` nem `boot_id`): a retomada é
+**sempre manual**.
+
+Regras de cada tabela:
+
+- **Nome de tabela e de coluna vêm do catálogo do banco destino** (`inspect`), nunca do pacote; o pacote só fornece
+  **valores**, parametrizados. Coluna do pacote que o destino não tem é descartada, não executada;
+- **tabela com dados no destino é pulada inteira** (`plugin_table_not_empty`): sem a chave natural da tabela, os ids de
+  origem colidiriam com os do destino. `merge` é opt-in e só deixa entrar linha de **id livre**, nunca troca a do destino;
+- **uma transação por tabela**: falha do banco no meio desfaz a tabela inteira (`plugin_table_failed`) e o job segue;
+- **`contact_id` viaja pelo TELEFONE** (em `__refs`), a chave natural, e é resolvido no destino mesmo depois do
+  reinício, sem estado salvo. Contato que não existe aqui vira `NULL` (se a coluna aceita) ou a linha é ignorada: o id cru
+  **nunca** é copiado (apontaria para outra pessoa);
+- coluna de **nome secreto** vai em `secrets.enc` indexada pela chave primária; sem a senha entra **vazia** (nunca em
+  claro, e nunca `NULL` em coluna `NOT NULL`, que derrubaria a tabela);
+- `media_path` **nunca** vem do pacote (arquivo de plugin não viaja); coluna binária vira vazia;
+- tabelas de nome `…session`, `…token`, `…cache`, `…queue`, `…lock` **nunca saem**;
+- no Postgres as sequences são reancoradas ao fim (`repair_postgres_sequences`); no SQLite o autoincremento acompanha.
+
+Diferenças para o Pro, por desenho: o Lite não tem o contrato `export_data`/`import_data` por serviço (só o caminho
+genérico) nem tabela de mapa de ids, e não há usuários nem caixas para religar.
 
 ## Estratégias (se já existir no servidor)
 
@@ -250,11 +321,10 @@ o CSS é gerado (`cd tools/css && npm run build`, conferido por `npm run check`)
 - Depois de um F5 a tela se reconstrói a partir dos jobs do servidor (`findResumable`).
 - Modo escuro: só `wa-*`, `.wa-field` e as tintas amber/red/blue que o `custom.css` já cobre.
 
-## O que ainda não viaja (próxima fase)
+## O que ainda não viaja
 
-- **Fase 3, plugins**: código desligado, configuração `plugin.<id>.*` e dados `plugin_<id>_*`, em duas etapas
-  (`awaiting_restart`). Antes disso, `server/routes/plugins.py` precisa do mesmo guarda de zip-bomb que o **update** já
-  tem (hoje o **import** de plugin extrai sem ele).
+- Arquivos que o plugin guarda em disco (`storages/plugin_data/<id>/`) e `media_path` de tabela de plugin **não viajam**.
+- Reinício automático entre as duas etapas dos plugins (o Lite só tem a retomada manual).
 - Telefone de grupo (JID `…@g.us`) e foto de grupo seguem as mesmas regras do contato.
 
 ## Limites conhecidos
@@ -282,4 +352,5 @@ Rodam em SQLite e, com `WHATSBOT_TEST_DB_URL=postgresql+psycopg://…`, em Postg
 `cryptography` e **pulam** sem ela. As garantias de segurança foram conferidas por **mutação** (remover a proteção e
 ver o teste falhar): allowlist de config nos dois sentidos, extensão ativa → `.bin`, TOCTOU, link simbólico, teto de
 upload, gate de senha, senha em memória, um job por vez, confirmação, ferramenta sempre desligada, `accept_code` na rota
-e no motor, regex de dependência, merge de código proibido.
+e no motor, regex de dependência, merge de código proibido, plugin sempre desligado, zip-slip/bomba/link simbólico no
+plugin, segredo de plugin por nome, `contact_id` pelo telefone.

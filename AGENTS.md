@@ -56,6 +56,7 @@ plugins/             → sistema de plugins (core, não confundir com storages/p
   migrator.py        → runner SQL com prefixo plugin_<id>_ obrigatório
   context.py         → ToolContext, PromptContext (passados aos plugins)
   restart.py         → schedule_restart() — touch sentinela + os._exit
+  package.py         → barreiras de zip do CÓDIGO de plugin (zip-slip, link simbólico, bomba contada em bytes reais) e instalar/trocar a pasta; usado pelo "Importar (.zip)", pelo "Atualizar" e pelo Importar/Exportar
 assets/              → recursos não-código (templates copiados em runtime)
   plugin_examples/   → plugins de referência (copiados pra storages/plugins/ no 1º boot)
 storages/plugins/    → user-writable, ignorado por .gitignore (preservado em updates)
@@ -80,7 +81,7 @@ portability/         → Importar/Exportar entre instalações (pacote .zip pró
   registry.py        → escopos, estratégias e a ALLOWLIST de config (nega por padrão, nos dois sentidos)
   jobs.py            → jobs em tabela, SQL portável SQLite/Postgres; senha do pacote só em memória
   handlers.py        → export, verificação (dry-run) e import; o dry-run e o import usam o MESMO `apply`
-  entities*.py       → config, tags, contatos, mensagens; `entities_ai.py` → motor de IA (variáveis, prompts, agentes, ferramentas com código, ajustes); media.py / avatars.py → arquivos e fotos
+  entities*.py       → config, tags, contatos, mensagens; `entities_ai.py` → motor de IA (variáveis, prompts, agentes, ferramentas com código, ajustes); `plugins_io.py` → plugins (código, config `plugin.<id>.*`, dados `plugin_<id>_*` em 2 etapas); media.py / avatars.py → arquivos e fotos
   warnings.py        → lista ÚNICA dos códigos de aviso (a frase vive só em `portabilityLogic.js`)
 server/routes/portability.py → endpoints /api/portability/* (exigem senha de painel)
 bin/gowa.exe         → binário GOWA pré-compilado do Windows (não editar; atualizações vão pra storages/bin/)
@@ -839,6 +840,16 @@ Leia antes de mexer. As regras que quebram segurança se ignoradas:
   motor recusa de novo) e a dependência pip passa por regex fechada (`-…`, `@`, `://`, `;` são recusados). Código nunca é
   "mesclado" (`ai_tools`: só `skip`/`overwrite`). `ai_engine_enabled` nunca viaja. Variável de IA com nome de segredo só vai
   cifrada (o NOME decide, não a marca do pacote). `tool_overrides` nunca cria linha. Testes: `tests/test_portability_agents.py`.
+- **Plugin no pacote** ([portability/plugins_io.py](portability/plugins_io.py)): é código que roda no servidor, então vale a mesma
+  regra das ferramentas de IA — entra SEMPRE desligado (inclusive ao substituir um que roda), só com `accept_code` (a rota exige
+  `code_tools_total + code_plugins_total > 0`; o motor recusa de novo), `skip` por padrão, `overwrite` só atualiza para versão
+  MAIOR e nunca rebaixa. O zip passa por [plugins/package.py](plugins/package.py) (a MESMA fonte do "Importar (.zip)" e do
+  "Atualizar"): bytes REAIS contados, e a prévia faz o ensaio (`safe_extract(zf, None)`) para recusar a mesma bomba. Config
+  `plugin.<id>.*`: o NOME decide o segredo (`registry.is_secret_field`), loopback não viaja. Dados em DUAS etapas: a tabela só
+  existe depois de ativar o plugin e reiniciar, então o import pausa em `awaiting_restart` com `resume_stage='plugins'` e o
+  operador clica "Continuar". Nome de tabela/coluna vem do catálogo do destino, nunca do pacote; `contact_id` viaja pelo
+  TELEFONE (`__refs`); `media_path` nunca vem do pacote. Testes: `tests/test_portability_plugins.py`, `tests/test_plugin_package.py`,
+  `tests/test_plugin_import_route.py`.
 - **Aviso novo** = uma linha em [portability/warnings.py](portability/warnings.py) + a frase em
   [portabilityLogic.js](web/static/js/utils/portabilityLogic.js), no mesmo commit (`tests/test_portability_warnings.py` confere).
 - **Chave de config nova ou tabela nova de conversa** muda o que viaja: atualize o registro, o guia e `agent/SYSTEM_HELP.md`.
@@ -1253,7 +1264,7 @@ python tests/test_endpoints.py
 python tests/test_gowa_update.py   # updater do GOWA (offline: release falsa via file:// + registry GHCR falso em http.server)
 python tests/test_gowa_proxy.py    # proxy do GOWA (offline, proxies SOCKS5/HTTP falsos em socket)
 node --test tests/gowa-prompt.test.cjs  # decisão dos modais de GOWA no frontend (sem navegador)
-python -m pytest tests/test_portability_*.py  # Importar/Exportar: formato, cripto, jobs, round-trip, contatos, mídia, agentes de IA, rotas e paridade de avisos (SQLite ou Postgres)
+python -m pytest tests/test_portability_*.py tests/test_plugin_package.py tests/test_plugin_import_route.py  # Importar/Exportar: formato, cripto, jobs, round-trip, contatos, mídia, agentes de IA, plugins, rotas e paridade de avisos; barreiras de zip de plugin (SQLite ou Postgres)
 node --test tests/portability-logic.test.cjs  # lógica pura da tela Importar/Exportar (sem navegador)
 python tests/test_provisioning_target.py  # par destino+frase do provisionamento + os dois seams (offline)
 python tests/test_llm_costing.py  # cache do LLM: session id, header x-session-id, estimate_cost com desconto, usage_repo (offline)

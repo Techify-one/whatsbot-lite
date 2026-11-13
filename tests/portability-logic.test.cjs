@@ -85,7 +85,7 @@ test('export: fotos de perfil vêm DESLIGADAS e só viajam quando ligadas com co
 
 test('escopos oferecidos são exatamente os do servidor, sem os do Pro', async () => {
     const {SCOPES} = await load();
-    assert.deepEqual(SCOPES.map((s) => s.id).sort(), ['agents', 'catalog', 'conversations', 'settings']);
+    assert.deepEqual(SCOPES.map((s) => s.id).sort(), ['agents', 'catalog', 'conversations', 'plugins', 'settings']);
 });
 
 // ── relatório ───────────────────────────────────────────────────────────────
@@ -317,4 +317,63 @@ test('pacote sem código: o corpo do confirm não leva accept_code', async () =>
     const {buildConfirmRequest, codeToolsTotal} = await load();
     assert.equal(codeToolsTotal(report()), 0);
     assert.equal('accept_code' in buildConfirmRequest({report: report(), strategy: {}}).body, false);
+});
+
+// ── Fase 3: plugins ─────────────────────────────────────────────────────────
+
+test('exportar plugins exige ao menos um plugin marcado e leva só os ids', async () => {
+    const {buildExportRequest} = await load();
+    assert.match(buildExportRequest({scopes: ['plugins'], pluginIds: []}).error, /plugin/i);
+    assert.match(buildExportRequest({scopes: ['plugins']}).error, /plugin/i);
+    const ok = buildExportRequest({scopes: ['plugins'], pluginIds: ['demo', '', 5, 'outro']});
+    assert.deepEqual(ok.body.plugin_ids, ['demo', 'outro']);
+    // sem o escopo, nenhum id vai no corpo
+    assert.equal('plugin_ids' in buildExportRequest({scopes: ['settings'], pluginIds: ['demo']}).body, false);
+});
+
+test('código de plugin também exige o "entendo" e manda accept_code', async () => {
+    const {buildConfirmRequest, codeTotal, codePluginRows} = await load();
+    const r = {...report(), code_plugins_total: 1,
+        code_plugins: [{id: 'demo', state: 'new', version: '1.2.0', dependencies: true}]};
+    assert.equal(codeTotal(r), 1);
+    assert.match(buildConfirmRequest({report: r, strategy: {}}).error, /código/);
+    assert.equal(buildConfirmRequest({report: r, strategy: {}, acceptCode: true}).body.accept_code, true);
+    const rows = codePluginRows(r);
+    assert.equal(rows[0].id, 'demo');
+    assert.match(rows[0].text, /desligado/);
+    assert.match(rows[0].text, /v1\.2\.0/);
+    assert.match(rows[0].text, /pip/);
+});
+
+test('ferramenta de IA + plugin somam na confirmação', async () => {
+    const {codeTotal} = await load();
+    assert.equal(codeTotal({code_tools_total: 2, code_plugins_total: 3}), 5);
+    assert.equal(codeTotal({}), 0);
+});
+
+test('espera da 2ª etapa dos plugins: não é falha nem interrupção, e dá para continuar', async () => {
+    const {isWaitingPlugins, isInterrupted, canContinue, pendingPlugins, waitingPluginsText, stateLabel,
+        shouldStopPolling} = await load();
+    const job = {state: 'awaiting_restart', resume_stage: 'plugins', interrupted: false,
+        report: {pending_plugin_data: ['demo/items', 'demo/logs', 'outro/t']}};
+    assert.equal(isWaitingPlugins(job), true);
+    assert.equal(isInterrupted(job), false);
+    assert.equal(canContinue(job), true);
+    assert.deepEqual(pendingPlugins(job), ['demo', 'outro']);
+    assert.match(waitingPluginsText(job), /demo, outro/);
+    assert.match(waitingPluginsText(job), /ativ/i);
+    assert.match(stateLabel('awaiting_restart', job), /plugin/i);
+    assert.equal(shouldStopPolling(job), true);
+    // interrompido pelo reinício continua sendo outra coisa
+    const intr = {state: 'awaiting_restart', interrupted: true};
+    assert.equal(isWaitingPlugins(intr), false);
+    assert.equal(canContinue(intr), true);
+    assert.equal(canContinue({state: 'running'}), false);
+    assert.equal(canContinue(null), false);
+});
+
+test('pendingPlugins tolera relatório sem a lista', async () => {
+    const {pendingPlugins} = await load();
+    assert.deepEqual(pendingPlugins({}), []);
+    assert.deepEqual(pendingPlugins({report: {pending_plugin_data: 'x'}}), []);
 });

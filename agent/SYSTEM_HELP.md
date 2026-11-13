@@ -313,7 +313,7 @@ Antes de tudo, defina a **senha do painel**: o pacote leva conversas e a chave d
 
 Para **exportar**:
 
-1. Marque o que levar: **Configurações do sistema**, **Tags**, **Contatos e conversas** (contatos, observações e todo o histórico de mensagens) e/ou **Agentes de IA** (agentes, prompts, variáveis, ajustes de ferramentas e ferramentas com código).
+1. Marque o que levar: **Configurações do sistema**, **Tags**, **Contatos e conversas** (contatos, observações e todo o histórico de mensagens), **Agentes de IA** (agentes, prompts, variáveis, ajustes de ferramentas e ferramentas com código) e/ou **Plugins** (você escolhe quais: código, configuração e dados).
 2. Se marcar conversas, escolha se leva os **arquivos de mídia** (deixa o pacote bem maior; dá para limitar por período) e as **fotos de perfil** (normalmente desnecessário, o WhatsBot baixa de novo sozinho).
 3. Para levar a chave de API, marque **Incluir segredos** e crie uma senha do pacote (mínimo de 12 caracteres, diferente da senha do painel). Guarde essa senha: sem ela não há como recuperar a chave.
 4. Clique em **Gerar pacote**, espere terminar e clique em **Baixar pacote**. O pacote fica disponível por 24 horas.
@@ -325,6 +325,8 @@ Para **importar**:
 3. Clique em **Confirmar importação**, leia o resumo do que será substituído, marque **Revisei e quero iniciar** e confirme. Não há como desfazer.
 
 Sobre **Agentes de IA**: as ferramentas com código são programas em Python. Ao importar, elas chegam **desligadas** e nada roda; o popup lista cada uma e pede a marcação **Entendo que o pacote traz código e quero importá-lo desligado**. Leia o código na tela de ferramentas antes de ligar uma: ligada, ela roda com acesso total ao servidor a cada reinício. Importar agentes não liga o motor de IA. Variáveis cujo nome indica segredo (como `token` ou `senha`) só vão com **Incluir segredos**. As credenciais do modelo não existem no Lite e não viajam.
+
+Sobre **Plugins**: um plugin é código que passa a rodar neste servidor, então ele chega **desligado**, o popup lista cada um e a mesma marcação **Entendo que o pacote traz código e quero importá-lo desligado** vale para eles. Um plugin já instalado só é trocado se você escolher **Substituir pelo do pacote** e a versão do pacote for maior (nunca rebaixa), e ele também fica desligado. Os dados do plugin só entram depois que ele for ativado, porque a tabela só existe depois disso: a importação termina a primeira etapa, fica em **Esperando o plugin ser ativado**, e você ativa o plugin na aba Plugins, espera o servidor reiniciar e clica em **Continuar importação**. Credenciais de plugin (campos com nome de `token`, `senha`, `chave de API`…) só vão com **Incluir segredos**, e arquivos que o plugin guarda em disco não viajam.
 
 Detalhes importantes: as conversas importadas entram sem notificação (não aparecem como não lidas e a IA não responde a elas). A senha do painel, a identidade da instalação, o estado do WhatsApp e o proxy não são levados; depois de importar em outro servidor, conecte o WhatsApp lá pelo QR. Se o servidor reiniciar no meio de uma importação, ela fica **Interrompida** e dá para **Continuar** de onde parou sem duplicar nada. Se algum registro der erro, use **Ver erros** na prévia ou em **Operações recentes**.
 

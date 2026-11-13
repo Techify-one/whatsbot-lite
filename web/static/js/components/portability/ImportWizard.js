@@ -11,9 +11,10 @@ import {
   confirmImport, listJobs, recalculateImport, resumeImport, uploadImport,
 } from '../../services/portabilityApi.js';
 import {
-  MAX_IMPORT_BYTES, buildConfirmRequest, confirmNeedsPassword, findResumable, formatBytes,
-  codeToolRows, initialStrategy, interruptedText, isInterrupted, isPasswordRequired, isPreviewStale, overwriteRows,
-  secretsState, totalChanges,
+  MAX_IMPORT_BYTES, buildConfirmRequest, canContinue, codePluginRows, codeToolRows,
+  confirmNeedsPassword, findResumable, formatBytes, initialStrategy, interruptedText, isInterrupted,
+  isPasswordRequired, isPreviewStale, isWaitingPlugins, overwriteRows, secretsState, totalChanges,
+  waitingPluginsText,
 } from '../../utils/portabilityLogic.js';
 import { ConfirmImportModal } from './ConfirmImportModal.js';
 import { ErrorDetailsModal } from './ErrorDetailsModal.js';
@@ -68,7 +69,7 @@ export function ImportWizard({ onChanged, onShowHistory, onPasswordRequired }) {
         setDryId(job.source_job || job.id);
         setDry({ state: 'succeeded', report: job.report || {} });
         setImportId(job.id);
-        if (job.state === 'awaiting_restart') setFinal(job);
+        if (job.state === 'awaiting_restart') setFinal(job);          // interrompido OU esperando plugins
       } else if (found.type === 'dryrun') {
         setDryId(job.id);
       } else {
@@ -308,9 +309,9 @@ export function ImportWizard({ onChanged, onShowHistory, onPasswordRequired }) {
 
       ${importId ? html`
         <${JobProgress} key=${attempt} jobId=${importId} title="Importando" onDone=${importDone} />
-        ${final && isInterrupted(final) ? html`
+        ${final && canContinue(final) ? html`
           <div class="flex flex-col gap-3">
-            <p class="text-sm text-wa-text">${interruptedText(final)}</p>
+            <p class="text-sm text-wa-text">${isWaitingPlugins(final) ? waitingPluginsText(final) : interruptedText(final)}</p>
             ${(final.needs_password || (final.report && final.report.secrets === 'ok')) && !savedPw ? html`
               <input type="password" autocomplete="new-password" value=${resumePw}
                 onInput=${(e) => setResumePw(e.target.value)} placeholder="Senha do pacote"
@@ -340,13 +341,13 @@ export function ImportWizard({ onChanged, onShowHistory, onPasswordRequired }) {
                 class="px-4 py-2 rounded-lg text-sm text-wa-text hover:bg-wa-hover cursor-pointer">Importar outro pacote</button>
             </div>
           </div>` : null}
-        ${final && final.state !== 'succeeded' && !isInterrupted(final) ? html`
+        ${final && final.state !== 'succeeded' && !canContinue(final) ? html`
           <div><button type="button" onClick=${reset}
             class="px-4 py-2 rounded-lg text-sm text-wa-text hover:bg-wa-hover cursor-pointer">Recomeçar</button></div>` : null}
       ` : null}
       ${askConfirm && report ? html`
         <${ConfirmImportModal} overwrites=${overwriteRows(report, strategy)} options=${optionLabels}
-          codeTools=${codeToolRows(report)}
+          codeTools=${codeToolRows(report)} codePlugins=${codePluginRows(report)}
           stale=${stale} busy=${confirming} onConfirm=${confirm} onCancel=${() => setAskConfirm(false)} />` : null}
       ${errorsFor ? html`<${ErrorDetailsModal} jobId=${errorsFor.jobId} entity=${errorsFor.entity}
         onClose=${() => setErrorsFor(null)} />` : null}

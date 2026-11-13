@@ -166,13 +166,19 @@ SCOPES: dict[str, tuple[str, ...]] = {
     "conversations": ("contacts", "messages"),
     # Motor de IA. ``ai_tools`` leva CÓDIGO PYTHON: entra sempre desligado e só com confirmação própria.
     "agents": ("ai_variables", "ai_prompts", "ai_tools", "ai_agents", "tool_overrides"),
+    # Plugins: CÓDIGO (entra desligado, só com confirmação), configuração ``plugin.<id>.*`` e DADOS
+    # (``plugin_<id>_*``, em duas etapas: a tabela só existe depois de ativar o plugin e reiniciar).
+    "plugins": ("plugins", "plugin_config", "plugin_data"),
 }
 
 #: Entidades que carregam segredo (para o relatório/UI saberem que a senha do pacote importa).
-SECRET_BEARING_ENTITIES = frozenset({"config", "ai_variables"})
+SECRET_BEARING_ENTITIES = frozenset({"config", "ai_variables", "plugin_config", "plugin_data"})
 
 #: Entidades que carregam CÓDIGO executável: exigem a confirmação ``accept_code`` do operador.
-CODE_BEARING_ENTITIES = frozenset({"ai_tools"})
+CODE_BEARING_ENTITIES = frozenset({"ai_tools", "plugins"})
+
+#: Entidades cujo padrão é SEMPRE ``skip`` (o que existe aqui nunca é tocado sem o operador escolher).
+SAFE_DEFAULT_SKIP = CODE_BEARING_ENTITIES | {"plugin_config", "plugin_data"}
 
 def entities_for(scopes: list[str]) -> list[str]:
     out: list[str] = []
@@ -214,14 +220,21 @@ SUPPORTED_STRATEGIES: dict[str, tuple[str, ...]] = {
     # Código nunca é "mesclado": ou se acrescenta a que falta, ou se troca a existente (e só com OVERWRITE).
     "ai_tools": (SKIP, OVERWRITE),
     "tool_overrides": (SKIP, MERGE, OVERWRITE),
+    # ``plugins`` é código: só acrescenta o que falta ou ATUALIZA para versão maior, e nunca rebaixa.
+    "plugins": (SKIP, OVERWRITE),
+    "plugin_config": (SKIP, OVERWRITE),
+    # Dados de plugin: tabela com dados é pulada inteira; ``merge`` (opt-in) só deixa entrar linha de id
+    # LIVRE, e nunca troca a do destino.
+    "plugin_data": (SKIP, MERGE),
 }
 
 def default_strategy(entity: str) -> str:
     """Padrão por entidade: ``merge`` se suportado, senão ``overwrite``, senão ``skip``.
 
-    ⚠️ Entidade com CÓDIGO (``ai_tools``) é sempre ``skip``: trocar o código que já existe aqui é uma escolha
-    explícita do operador (``overwrite``), nunca o padrão."""
-    if entity in CODE_BEARING_ENTITIES:
+    ⚠️ Entidade com CÓDIGO (``ai_tools``, ``plugins``) e a que mexeria no que o operador já tem
+    (``plugin_config``, ``plugin_data``) são sempre ``skip``: trocar o que existe aqui é uma escolha
+    explícita do operador, nunca o padrão."""
+    if entity in SAFE_DEFAULT_SKIP:
         return SKIP
     sup = SUPPORTED_STRATEGIES.get(entity, (SKIP,))
     if MERGE in sup:

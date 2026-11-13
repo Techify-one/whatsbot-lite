@@ -173,11 +173,12 @@ def test_every_scope_entity_has_a_strategy_entry():
         for e in ents:
             assert e in reg.SUPPORTED_STRATEGIES, (sc, e)
 
-def test_code_is_never_merged_and_only_ai_tools_carry_code():
+def test_code_is_never_merged_and_only_tools_and_plugins_carry_code():
     """Código não se "mescla": ou acrescenta a que falta, ou troca (e só com 'substituir')."""
     assert reg.SUPPORTED_STRATEGIES["ai_tools"] == (reg.SKIP, reg.OVERWRITE)
     assert reg.default_strategy("ai_tools") == reg.SKIP          # trocar código é escolha explícita, nunca o padrão
-    assert reg.CODE_BEARING_ENTITIES == {"ai_tools"}
+    assert reg.CODE_BEARING_ENTITIES == {"ai_tools", "plugins"}
+    assert reg.default_strategy("plugins") == reg.SKIP and reg.default_strategy("plugin_data") == reg.SKIP
     with pytest.raises(ValueError):
         reg.validate_strategy({"ai_tools": "merge"}, ["ai_tools"])
 

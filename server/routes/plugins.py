@@ -17,6 +17,7 @@ from fastapi import UploadFile
 from fastapi.responses import StreamingResponse
 
 from db.repositories import config_repo, plugin_repo, tool_override_repo
+from plugins import package
 from plugins.manifest import (
     WHATSBOT_API_VERSION,
     find_manifest_file,
@@ -59,132 +60,14 @@ def _export_filename(plugin_id: str, plugin_dir: Path) -> str:
     return f"{plugin_id}-{version}-plugin.zip"
 
 
-# Cap on the total UNCOMPRESSED size of an uploaded plugin zip (anti zip-bomb).
-_MAX_UNCOMPRESSED_BYTES = 256 * 1024 * 1024  # 256 MiB
-
-
-def _read_zip_manifest(contents: bytes) -> tuple[zipfile.ZipFile, dict, str]:
-    """Open an uploaded plugin zip and return (zipfile, manifest dict, plugin id).
-
-    Raises ValueError(<mensagem amigável>) on any malformed input so callers can
-    surface it via ``_err``.
-    """
-    try:
-        zf = zipfile.ZipFile(io.BytesIO(contents))
-    except zipfile.BadZipFile:
-        raise ValueError("arquivo .zip inválido")
-
-    names = zf.namelist()
-    manifest_name = next(
-        (c for c in ("plugin.yaml", "plugin.yml", "plugin.json") if c in names), None
-    )
-    if manifest_name is None:
-        raise ValueError("manifest (plugin.yaml/plugin.json) ausente na raiz do zip")
-    try:
-        manifest_text = zf.read(manifest_name).decode("utf-8")
-    except Exception as e:
-        raise ValueError(f"falha ao ler manifest: {e}")
-
-    if manifest_name.endswith(".json"):
-        try:
-            meta = json.loads(manifest_text)
-        except Exception as e:
-            raise ValueError(f"manifest JSON inválido: {e}")
-    else:
-        from plugins.manifest import _parse_yaml  # type: ignore
-        try:
-            meta = _parse_yaml(manifest_text) or {}
-        except Exception as e:
-            raise ValueError(f"manifest YAML inválido: {e}")
-
-    pid = meta.get("id") if isinstance(meta, dict) else None
-    if not isinstance(pid, str) or not _PLUGIN_ID_RE.match(pid):
-        raise ValueError("manifest sem id válido")
-    return zf, meta, pid
-
-
-def _reject_unsafe_zip_paths(zf: zipfile.ZipFile) -> None:
-    """Block path traversal (absolute paths / ``..``) before extracting."""
-    for member in zf.infolist():
-        name = member.filename
-        if name.startswith("/") or ".." in name.replace("\\", "/").split("/"):
-            raise ValueError(f"caminho perigoso no zip: {name}")
-
-
-def _version_key(version: str) -> tuple[int, ...]:
-    """Best-effort numeric key for comparing semver-ish versions.
-
-    Only the leading dotted integer components are compared (``1.2.3`` →
-    ``(1, 2, 3)``); pre-release/build suffixes are ignored. Good enough to flag a
-    downgrade — not a strict semver gate.
-    """
-    raw = str(version or "0").strip()
-    if raw[:1] in ("v", "V"):          # tolera prefixo "v" (ex.: "v1.2.3")
-        raw = raw[1:]
-    parts: list[int] = []
-    for chunk in re.split(r"[.\-+]", raw):
-        if chunk.isdigit():
-            parts.append(int(chunk))
-        else:
-            break
-    return tuple(parts) or (0,)
-
-
-def _swap_plugin_dir(
-    zf: zipfile.ZipFile, plugins_dir: Path, pid: str, *, keep_backup: bool = False,
-) -> Path | None:
-    """Replace ``plugins_dir/pid`` with the zip's contents, atomically-ish.
-
-    Extracts into a dot-prefixed staging dir (ignored by the loader), then renames
-    the current folder aside and the staging folder into place. On failure the
-    original folder is restored. NEVER touches the plugin's DB tables, settings or
-    migration history — only the on-disk code is swapped.
-    """
-    # Guard against a zip-bomb: cap the total uncompressed size before extracting.
-    total_uncompressed = sum(getattr(i, "file_size", 0) for i in zf.infolist())
-    if total_uncompressed > _MAX_UNCOMPRESSED_BYTES:
-        raise ValueError(
-            f"zip grande demais: {total_uncompressed} bytes descomprimidos "
-            f"(limite {_MAX_UNCOMPRESSED_BYTES})"
-        )
-
-    target = plugins_dir / pid
-    staging = plugins_dir / f".{pid}.update-staging"
-    backup = plugins_dir / f".{pid}.update-backup"
-    for tmp in (staging, backup):
-        shutil.rmtree(tmp, ignore_errors=True)
-
-    staging.mkdir(parents=True)
-    try:
-        zf.extractall(staging)
-    except Exception as e:
-        shutil.rmtree(staging, ignore_errors=True)
-        raise ValueError(f"falha ao extrair zip: {e}")
-
-    # Backward compatibility for plugins that stored user-owned files inside
-    # their code folder before ``plugins.context.plugin_data_dir`` existed.
-    # New plugins should use that external durable directory instead.
-    for name in ("data", "uploads", "media", "storage", ".data"):
-        source = target / name
-        destination = staging / name
-        if source.exists() and not destination.exists():
-            if source.is_dir():
-                shutil.copytree(source, destination)
-            else:
-                shutil.copy2(source, destination)
-
-    os.replace(target, backup)          # current code aside (same fs → atomic)
-    try:
-        os.replace(staging, target)     # new code into place
-    except Exception:
-        os.replace(backup, target)      # restore original on failure
-        shutil.rmtree(staging, ignore_errors=True)
-        raise
-    if keep_backup:
-        return backup
-    shutil.rmtree(backup, ignore_errors=True)
-    return None
-
+# As barreiras de zip (zip-slip, link simbólico, zip-bomb) e a troca de pasta vivem em
+# ``plugins/package.py``, a fonte única: o Importar/Exportar (``portability/``) usa o MESMO código. Os
+# nomes antigos ficam como alias porque ``tests/test_plugin_update.py`` os importa daqui.
+_MAX_UNCOMPRESSED_BYTES = package.MAX_UNCOMPRESSED_BYTES
+_read_zip_manifest = package.read_zip_manifest
+_reject_unsafe_zip_paths = package.reject_unsafe_zip_paths
+_version_key = package.version_key
+_swap_plugin_dir = package.swap_plugin_dir
 
 def register_routes(app, deps):
     plugins_dir: Path = deps.plugins_dir
@@ -361,55 +244,23 @@ def register_routes(app, deps):
     async def import_plugin(file: UploadFile):
         contents = await file.read()
         try:
-            zf = zipfile.ZipFile(io.BytesIO(contents))
-        except zipfile.BadZipFile:
-            return _err("arquivo .zip inválido")
-
-        # find manifest at root
-        names = zf.namelist()
-        manifest_name = None
-        for candidate in ("plugin.yaml", "plugin.yml", "plugin.json"):
-            if candidate in names:
-                manifest_name = candidate
-                break
-        if manifest_name is None:
-            return _err("manifest (plugin.yaml/plugin.json) ausente na raiz do zip")
-        try:
-            manifest_text = zf.read(manifest_name).decode("utf-8")
-        except Exception as e:
-            return _err(f"falha ao ler manifest: {e}")
-
-        # extract id without full validation (it'll be validated when loading)
-        if manifest_name.endswith(".json"):
-            try:
-                meta = json.loads(manifest_text)
-            except Exception as e:
-                return _err(f"manifest JSON inválido: {e}")
-        else:
-            from plugins.manifest import _parse_yaml  # type: ignore
-            try:
-                meta = _parse_yaml(manifest_text) or {}
-            except Exception as e:
-                return _err(f"manifest YAML inválido: {e}")
-        pid = meta.get("id") if isinstance(meta, dict) else None
-        if not isinstance(pid, str) or not _PLUGIN_ID_RE.match(pid):
-            return _err("manifest sem id válido")
+            zf, meta, pid = _read_zip_manifest(contents)
+            _reject_unsafe_zip_paths(zf)
+        except ValueError as e:
+            return _err(str(e))
 
         target = plugins_dir / pid
         if target.exists():
             return _err(f"plugin '{pid}' já instalado — desinstale antes")
 
-        # path traversal protection
-        for member in zf.infolist():
-            name = member.filename
-            if name.startswith("/") or ".." in name.replace("\\", "/").split("/"):
-                return _err(f"caminho perigoso no zip: {name}")
-
-        target.mkdir(parents=True)
+        # Mesmo guarda do "Atualizar": o teto de bytes é conferido ANTES de extrair e de novo, em bytes
+        # reais, durante a extração (o ``file_size`` do zip é declarado pelo próprio arquivo).
         try:
-            zf.extractall(target)
-        except Exception as e:
-            shutil.rmtree(target, ignore_errors=True)
+            await asyncio.to_thread(package.install_plugin_dir, zf, plugins_dir, pid)
+        except ValueError as e:
+            return _err(str(e))
+        except Exception as e:  # noqa: BLE001
+            logger.exception("import of plugin %s failed", pid)
             return _err(f"falha ao extrair zip: {e}")
 
         version = str(meta.get("version") or "0.0.0") if isinstance(meta, dict) else "0.0.0"

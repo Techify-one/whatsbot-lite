@@ -113,3 +113,23 @@ export async function downloadExport(id) {
   setTimeout(() => URL.revokeObjectURL(url), 1000);
   return { ok: true };
 }
+
+/** Plugins instalados (para escolher o que exportar). Mesma rota da aba Plugins; só leitura. */
+export async function listInstalledPlugins() {
+  let res;
+  try {
+    res = await fetch('/api/plugins', { headers: authHeaders(), cache: 'no-store' });
+  } catch (_) {
+    return { ok: false, error: 'Sem resposta do servidor.', status: 0 };
+  }
+  if (res.status === 401) { handleUnauthorized(); return { ...UNAUTHORIZED }; }
+  let json = null;
+  try { json = await res.json(); } catch (_) { json = null; }
+  const list = json && json.data && Array.isArray(json.data.plugins) ? json.data.plugins : null;
+  if (!list) return { ok: false, error: `Erro ${res.status}`, status: res.status };
+  return {
+    ok: true,
+    data: list.filter((p) => p && typeof p.id === 'string' && !p.error)
+      .map((p) => ({ id: p.id, name: p.name || p.id, version: p.version || '', enabled: !!p.enabled })),
+  };
+}

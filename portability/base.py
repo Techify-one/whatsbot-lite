@@ -74,6 +74,12 @@ class Env:
     avatar_wanted: dict = field(default_factory=dict)
     avatar_bytes: int = 0
     avatar_members: frozenset = frozenset()
+    #: ---- plugins (``portability.plugins_io``) ----
+    #: export: ids escolhidos, pasta temporária dos zips e ``{id: caminho do zip}`` (copiados depois das
+    #: entidades, pelo mesmo motivo da mídia).
+    plugin_ids: list = field(default_factory=list)
+    plugin_tmp: str = ""
+    plugin_zips: dict = field(default_factory=dict)
     #: último ``(entidade, chave, código)`` avisado — o laço o usa como motivo do ERRO da linha.
     last_warn: tuple | None = None
     #: destino dos erros por linha (``jobs.ErrorSink``); ``None`` = não grava (export, testes).
