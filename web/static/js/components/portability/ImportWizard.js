@@ -12,7 +12,7 @@ import {
 } from '../../services/portabilityApi.js';
 import {
   MAX_IMPORT_BYTES, buildConfirmRequest, confirmNeedsPassword, findResumable, formatBytes,
-  initialStrategy, interruptedText, isInterrupted, isPasswordRequired, isPreviewStale, overwriteRows,
+  codeToolRows, initialStrategy, interruptedText, isInterrupted, isPasswordRequired, isPreviewStale, overwriteRows,
   secretsState, totalChanges,
 } from '../../utils/portabilityLogic.js';
 import { ConfirmImportModal } from './ConfirmImportModal.js';
@@ -133,20 +133,21 @@ export function ImportWizard({ onChanged, onShowHistory, onPasswordRequired }) {
     } finally { setRecalculating(false); }
   };
 
-  const confirmArgs = () => ({
-    report: dry.report, strategy, password: savedPw || confirmPw, overwriteSecrets });
+  const confirmArgs = (acceptCode) => ({
+    report: dry.report, strategy, password: savedPw || confirmPw, overwriteSecrets, acceptCode });
 
   // 1º passo do "Confirmar importação": valida e só então abre o popup.
   const askToConfirm = () => {
     setError('');
-    const req = buildConfirmRequest(confirmArgs());
+    // O "entendo que traz código" é pedido DENTRO do popup, então aqui só valida o resto.
+    const req = buildConfirmRequest(confirmArgs(true));
     if (req.error) { setError(req.error); return; }
     setAskConfirm(true);
   };
 
-  const confirm = async () => {
+  const confirm = async (acceptCode) => {
     setError('');
-    const req = buildConfirmRequest(confirmArgs());
+    const req = buildConfirmRequest(confirmArgs(!!acceptCode));
     if (req.error) { setAskConfirm(false); setError(req.error); return; }
     setConfirming(true);
     try {
@@ -345,6 +346,7 @@ export function ImportWizard({ onChanged, onShowHistory, onPasswordRequired }) {
       ` : null}
       ${askConfirm && report ? html`
         <${ConfirmImportModal} overwrites=${overwriteRows(report, strategy)} options=${optionLabels}
+          codeTools=${codeToolRows(report)}
           stale=${stale} busy=${confirming} onConfirm=${confirm} onCancel=${() => setAskConfirm(false)} />` : null}
       ${errorsFor ? html`<${ErrorDetailsModal} jobId=${errorsFor.jobId} entity=${errorsFor.entity}
         onClose=${() => setErrorsFor(null)} />` : null}

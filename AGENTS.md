@@ -80,7 +80,7 @@ portability/         → Importar/Exportar entre instalações (pacote .zip pró
   registry.py        → escopos, estratégias e a ALLOWLIST de config (nega por padrão, nos dois sentidos)
   jobs.py            → jobs em tabela, SQL portável SQLite/Postgres; senha do pacote só em memória
   handlers.py        → export, verificação (dry-run) e import; o dry-run e o import usam o MESMO `apply`
-  entities*.py       → config, tags, contatos, mensagens; media.py / avatars.py → arquivos e fotos
+  entities*.py       → config, tags, contatos, mensagens; `entities_ai.py` → motor de IA (variáveis, prompts, agentes, ferramentas com código, ajustes); media.py / avatars.py → arquivos e fotos
   warnings.py        → lista ÚNICA dos códigos de aviso (a frase vive só em `portabilityLogic.js`)
 server/routes/portability.py → endpoints /api/portability/* (exigem senha de painel)
 bin/gowa.exe         → binário GOWA pré-compilado do Windows (não editar; atualizações vão pra storages/bin/)
@@ -812,7 +812,7 @@ usuário define o limite em `disk_limit_gb` pela própria tela. É só informati
 | POST | `/api/portability/exports` | Cria o job de export `{scopes, include_secrets?, password?, include_media?, media_from?, media_to?, include_avatars?}`. Todas as rotas `/api/portability/*` respondem 403 `password_required` sem senha de painel e 409 `job_busy` se já há um job |
 | POST | `/api/portability/jobs/{id}/download` | Baixa o pacote de um export concluído (POST de propósito, `no-store`) |
 | POST | `/api/portability/imports` | Upload multipart (em blocos, teto de 5 GB, 413) → job de **verificação** que não grava nada |
-| POST | `/api/portability/imports/{id}/confirm` | `{strategy, password?, overwrite_secrets?, acknowledged: true}` → job de import sobre o mesmo pacote |
+| POST | `/api/portability/imports/{id}/confirm` | `{strategy, password?, overwrite_secrets?, acknowledged: true, accept_code?}` → job de import sobre o mesmo pacote (`accept_code: true` é obrigatório quando a verificação achou `code_tools_total > 0`, senão 400 `code_not_accepted`) |
 | POST | `/api/portability/imports/{id}/recalculate` | Refaz a verificação com outras estratégias |
 | POST | `/api/portability/jobs/{id}/resume` | Continua um import interrompido (pede a senha do pacote de novo) |
 | GET | `/api/portability/jobs`, `/jobs/{id}`, `/jobs/{id}/errors` | Consulta por polling; resposta é lista branca (sem `params` nem caminho) |
@@ -834,6 +834,11 @@ Leia antes de mexer. As regras que quebram segurança se ignoradas:
 - **Importar não é atividade**: não lidas zeradas, nenhum evento de plugin nem `new_message`, a IA não responde.
 - **Mídia**: só `statics/media` e `statics/operator`; nome novo no destino e extensão por allowlist (`.html`/`.svg` viram
   `.bin`, porque `/statics` é servido na origem do painel); origem revalidada na cópia.
+- **Ferramenta de IA com código** (`ai_tools.code` roda no boot SEM interruptor): entra SEMPRE com `enabled=0`, o `enabled` do
+  pacote é ignorado, só é gravada com `accept_code` (a rota exige pelo que a prévia ACHOU, não pela estratégia escolhida; o
+  motor recusa de novo) e a dependência pip passa por regex fechada (`-…`, `@`, `://`, `;` são recusados). Código nunca é
+  "mesclado" (`ai_tools`: só `skip`/`overwrite`). `ai_engine_enabled` nunca viaja. Variável de IA com nome de segredo só vai
+  cifrada (o NOME decide, não a marca do pacote). `tool_overrides` nunca cria linha. Testes: `tests/test_portability_agents.py`.
 - **Aviso novo** = uma linha em [portability/warnings.py](portability/warnings.py) + a frase em
   [portabilityLogic.js](web/static/js/utils/portabilityLogic.js), no mesmo commit (`tests/test_portability_warnings.py` confere).
 - **Chave de config nova ou tabela nova de conversa** muda o que viaja: atualize o registro, o guia e `agent/SYSTEM_HELP.md`.
@@ -1248,7 +1253,7 @@ python tests/test_endpoints.py
 python tests/test_gowa_update.py   # updater do GOWA (offline: release falsa via file:// + registry GHCR falso em http.server)
 python tests/test_gowa_proxy.py    # proxy do GOWA (offline, proxies SOCKS5/HTTP falsos em socket)
 node --test tests/gowa-prompt.test.cjs  # decisão dos modais de GOWA no frontend (sem navegador)
-python -m pytest tests/test_portability_*.py  # Importar/Exportar: formato, cripto, jobs, round-trip, contatos, mídia, rotas e paridade de avisos (SQLite ou Postgres)
+python -m pytest tests/test_portability_*.py  # Importar/Exportar: formato, cripto, jobs, round-trip, contatos, mídia, agentes de IA, rotas e paridade de avisos (SQLite ou Postgres)
 node --test tests/portability-logic.test.cjs  # lógica pura da tela Importar/Exportar (sem navegador)
 python tests/test_provisioning_target.py  # par destino+frase do provisionamento + os dois seams (offline)
 python tests/test_llm_costing.py  # cache do LLM: session id, header x-session-id, estimate_cost com desconto, usage_repo (offline)

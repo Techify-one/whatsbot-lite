@@ -41,6 +41,8 @@ class Env:
     #: conteúdo já decifrado (vazio quando o pacote não tem segredos / sem senha).
     secrets: dict = field(default_factory=dict)
     overwrite_secrets: bool = False
+    #: o operador confirmou que o pacote traz CÓDIGO (``ai_tools``). Sem isto nenhuma ferramenta é gravada.
+    accept_code: bool = False
     #: chaves de config alteradas pelo import (para o pós-processo).
     config_changed: list[str] = field(default_factory=list)
     #: ``{tipo: {chave}}`` do que existiria após o import (ver docstring do módulo).

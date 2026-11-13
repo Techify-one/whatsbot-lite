@@ -158,6 +158,7 @@ def _apply_tag(row: dict, strategy: str, env: Env, dry_run: bool) -> str:
 
 # ═══ registro ═══════════════════════════════════════════════════════════════
 
+from portability import entities_ai as _ai  # noqa: E402
 from portability import entities_contacts as _contacts  # noqa: E402  (depende só de base/registry)
 
 ENTITIES: dict[str, Entity] = {e.name: e for e in (
@@ -165,6 +166,11 @@ ENTITIES: dict[str, Entity] = {e.name: e for e in (
     Entity("tags", _export_tags, _apply_tag),
     Entity("contacts", _contacts.export_contacts, _contacts.apply_contact),
     Entity("messages", _contacts.export_messages, _contacts.apply_message),
+    Entity("ai_variables", _ai.export_variables, _ai.apply_variable),
+    Entity("ai_prompts", _ai.export_prompts, _ai.apply_prompt),
+    Entity("ai_tools", _ai.export_tools, _ai.apply_tool),
+    Entity("ai_agents", _ai.export_agents, _ai.apply_agent),
+    Entity("tool_overrides", _ai.export_overrides, _ai.apply_override),
 )}
 
 def entity(name: str) -> Entity:

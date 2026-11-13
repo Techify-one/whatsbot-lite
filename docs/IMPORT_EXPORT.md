@@ -19,7 +19,8 @@ mensagem clara. O Lite é menor, então o import/export também é:
 | vários canais (Telegram, Meta…) | **não existem**: um só GOWA |
 | conversa separada do contato | **não existe**: a conversa é implícita (`messages.contact_id`) |
 | protocolos, etiquetas, campos personalizados, respostas rápidas | **não existem**: só tags e observações |
-| agentes de IA, ferramentas, plugins, credenciais | **fases seguintes** (ver "O que ainda não viaja") |
+| agentes de IA, prompts, variáveis, ferramentas | **viajam** (escopo "Agentes de IA"; `ai_credentials` não existe no Lite) |
+| plugins | **fase seguinte** (ver "O que ainda não viaja") |
 | Postgres apenas | **SQLite ou Postgres**: o motor de jobs é SQL portável |
 | reinício automático no meio do import | **não há**; só "Continuar" depois de uma interrupção |
 
@@ -30,6 +31,7 @@ mensagem clara. O Lite é menor, então o import/export também é:
 | Configurações do sistema | `config` | por **allowlist**, nos dois sentidos |
 | Tags | `tags` | nome único + cor |
 | Contatos e conversas | `contacts`, `messages` | + observações, tags de cada contato, mídia e fotos (opcionais) |
+| Agentes de IA | `ai_variables`, `ai_prompts`, `ai_tools`, `ai_agents`, `tool_overrides` | ⚠️ `ai_tools` leva **código Python**: ver "Motor de IA" |
 
 ### Configuração: allowlist, nunca denylist
 
@@ -94,6 +96,45 @@ memória (contatos e mensagens sempre viajam juntos), por isso não há tabela d
 
 ⚠️ O telefone de destino vem do contato **já resolvido no destino**, nunca da linha do pacote, inclusive para dar
 nome ao arquivo da foto de perfil.
+
+## Motor de IA
+
+Escrita pelos repositórios (`agent_repo`, `prompt_repo`, `variable_repo`, `tool_repo`, `tool_override_repo`), então cada
+mudança sobe a `version` e gera histórico. Agente, prompt e variável valem na **próxima mensagem** (a fábrica lê o banco a
+cada pedido); só o ajuste de ferramentas recarrega a lista do `AgentHandler`. Nada emite evento.
+
+### ⚠️ `ai_tools.code` é código que roda no boot
+
+`agent/ai_tool_installer.py` importa toda ferramenta com `enabled=1` **sem nenhum interruptor** e instala `dependencies`
+com `pip` no mesmo passo. Um pacote é dado não confiável, então:
+
+- a ferramenta **sempre entra desligada** (`enabled=0`, `install_status='pending'`); o `enabled` do pacote é ignorado.
+  Quem quiser usá-la a liga depois de ler o código;
+- só é gravada com **`accept_code`**. A rota de confirmação exige `accept_code: true` sempre que a verificação achou
+  código (`code_tools_total > 0`), **pelo que o pacote carrega e não pela estratégia escolhida**: com `skip` nada seria
+  gravado, mas trocar para `overwrite` sem recalcular não pode esconder código. O motor recusa de novo (`env.accept_code`,
+  aviso `tool_code_not_accepted`): é defesa em profundidade, não a única barreira;
+- o popup lista cada ferramenta (nova, igual ou diferente da existente; com ou sem dependências) e tem uma caixa própria,
+  separada do "Revisei e quero iniciar";
+- a dependência passa por **regex fechada** (`entities_ai.is_pip_spec`): nome + extras + comparadores de versão. Começar
+  com `-` (`--index-url`, `-r`), ter `@`, `://`, `;` ou espaço é recusado, porque a lista vai direto para o argv do `pip`;
+- o nome da ferramenta segue a **mesma regra do instalador** (`NAME_RE`);
+- código **não é mesclado**: `ai_tools` só aceita `skip` e `overwrite`; idêntica à que já existe fica como está (não a
+  desliga); substituída fica **desligada** (`tool_replaced_disabled`);
+- `install_status`, `install_error` e `installed_deps` **não viajam** (são desta máquina).
+
+### Demais entidades
+
+- **`ai_engine_enabled` nunca viaja**: importar um agente não liga o motor.
+- **Variáveis**: nome no padrão do `{placeholder}`. Nome que indica segredo (`registry.is_secret_name`) só vai em
+  `secrets.enc`; **o nome decide, não a marca `secret` do pacote**, então um pacote forjado não coloca valor em claro.
+- **Prompts e agentes**: `merge` não pisa no que foi **editado neste servidor** (`version > 1`); a semente do boot
+  (`version == 1`) é substituída, senão importar numa instalação nova não traria o prompt. `model_config` guarda só os quatro
+  campos que o motor lê (`model`, `temperature`, `top_p`, `max_tokens`); `tool_names` é `null` (todas) ou lista de nomes.
+  Referência solta (prompt ou ferramenta que não existe aqui nem veio no pacote) não impede o import: avisa.
+- **`tool_overrides`** (ferramenta desligada, renomeada ou redescrita) **nunca cria linha**: ela nasce quando a ferramenta
+  é registrada no boot, e o boot apaga as órfãs. Ferramenta que não existe aqui (plugin ausente) é pulada com aviso.
+- Ordem de import: variáveis → prompts → ferramentas → agentes → ajustes (o agente confere a ferramenta que o pacote cria).
 
 ## Estratégias (se já existir no servidor)
 
@@ -209,11 +250,8 @@ o CSS é gerado (`cd tools/css && npm run build`, conferido por `npm run check`)
 - Depois de um F5 a tela se reconstrói a partir dos jobs do servidor (`findResumable`).
 - Modo escuro: só `wa-*`, `.wa-field` e as tintas amber/red/blue que o `custom.css` já cobre.
 
-## O que ainda não viaja (próximas fases)
+## O que ainda não viaja (próxima fase)
 
-- **Fase 2, motor de IA**: `ai_variables`, `ai_prompts`, `ai_agents`, `ai_tools` e `tool_overrides`. ⚠️ `ai_tools.code`
-  é Python que **roda no boot sem nenhum interruptor** (`agent/ai_tool_installer.py`); importar com `enabled=0` e
-  confirmação explícita será a única barreira. O Lite não tem `ai_credentials`.
 - **Fase 3, plugins**: código desligado, configuração `plugin.<id>.*` e dados `plugin_<id>_*`, em duas etapas
   (`awaiting_restart`). Antes disso, `server/routes/plugins.py` precisa do mesmo guarda de zip-bomb que o **update** já
   tem (hoje o **import** de plugin extrai sem ele).
@@ -243,4 +281,5 @@ node --test tests/portability-logic.test.cjs      # lógica da tela
 Rodam em SQLite e, com `WHATSBOT_TEST_DB_URL=postgresql+psycopg://…`, em Postgres. Os que cifram precisam de
 `cryptography` e **pulam** sem ela. As garantias de segurança foram conferidas por **mutação** (remover a proteção e
 ver o teste falhar): allowlist de config nos dois sentidos, extensão ativa → `.bin`, TOCTOU, link simbólico, teto de
-upload, gate de senha, senha em memória, um job por vez, confirmação.
+upload, gate de senha, senha em memória, um job por vez, confirmação, ferramenta sempre desligada, `accept_code` na rota
+e no motor, regex de dependência, merge de código proibido.

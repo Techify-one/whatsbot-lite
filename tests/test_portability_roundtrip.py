@@ -141,10 +141,10 @@ def _dryrun(pkg: str, *, password: str | None = None, strategy: dict | None = No
     return jobs.get(j["id"])
 
 def _import(dry: dict, *, password: str | None = None, strategy: dict | None = None,
-            overwrite_secrets: bool = False) -> dict:
+            overwrite_secrets: bool = False, accept_code: bool = False) -> dict:
     params = {"package_path": dry["params"]["package_path"],
               "package_sha256": dry["params"]["package_sha256"], "has_password": bool(password),
-              "overwrite_secrets": overwrite_secrets,
+              "overwrite_secrets": overwrite_secrets, "accept_code": accept_code,
               "strategy": strategy if strategy is not None else dry["report"].get("strategy")}
     j = jobs.create("import", params=params, package_path=dry["params"]["package_path"],
                     package_sha256=dry["params"]["package_sha256"], source_job=dry["id"],

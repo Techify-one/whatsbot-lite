@@ -278,8 +278,14 @@ def register_routes(app, deps):
         # Confirmação explícita de quem leu o que será substituído (o popup da tela a exige).
         if not _truthy(body.get("acknowledged")):
             return _err("Confirme que revisou o que será importado.", 400, error_code="not_acknowledged")
+        # Pacote que traz CÓDIGO (ferramentas de IA): confirmação própria, separada do "revisei". O servidor
+        # a exige pelo que a verificação ACHOU no pacote, não pelo que a tela mandar.
+        if int(report.get("code_tools_total") or 0) > 0 and not _truthy(body.get("accept_code")):
+            return _err("Este pacote traz código de ferramentas de IA. Confirme que você revisou a lista.",
+                        400, error_code="code_not_accepted")
         params = {"strategy": strategy, "package_path": dry["package_path"],
                   "overwrite_secrets": _truthy(body.get("overwrite_secrets")),
+                  "accept_code": _truthy(body.get("accept_code")),
                   "has_password": bool(password), "package_sha256": dry.get("package_sha256")}
         new_id = str(uuid.uuid4())
         async with create_lock:

@@ -15,6 +15,8 @@ export const SCOPES = [
     hint: 'As tags (nome e cor) para organizar os contatos.' },
   { id: 'conversations', label: 'Contatos e conversas',
     hint: 'Contatos, observações, tags de cada contato e todo o histórico de mensagens (inclusive notas privadas). É o que os clientes escreveram: guarde o pacote com cuidado.' },
+  { id: 'agents', label: 'Agentes de IA',
+    hint: 'Agentes, prompts, variáveis, ajustes de ferramentas e as ferramentas com código. O código das ferramentas é Python: ao importar, elas chegam desligadas e pedem a sua confirmação.' },
 ];
 
 export const ENTITY_LABELS = {
@@ -24,6 +26,11 @@ export const ENTITY_LABELS = {
   messages: 'Mensagens',
   media: 'Arquivos de mídia',
   avatars: 'Fotos de perfil',
+  ai_variables: 'Variáveis da IA',
+  ai_prompts: 'Prompts da IA',
+  ai_agents: 'Agentes de IA',
+  ai_tools: 'Ferramentas com código',
+  tool_overrides: 'Ajustes de ferramentas',
 };
 
 /** Os valores internos (`skip`/`merge`/`overwrite`) não mudam — só o texto. "Manter o que já existe" era lido
@@ -61,6 +68,13 @@ export const WARNING_LABELS = {
   duplicate_in_package: 'O pacote tinha o mesmo número duas vezes (com e sem o 9) — foram unidos em um contato.',
   tag_unknown: 'Tag que não existe aqui nem veio no pacote — não aplicada ao contato.',
   contact_unavailable: 'O contato da mensagem não foi importado — mensagem ignorada.',
+  agent_prompt_missing: 'O agente aponta para um prompt que não existe aqui nem veio no pacote — ele usa o prompt padrão.',
+  agent_tool_missing: 'O agente lista uma ferramenta que não existe aqui nem veio no pacote — ela não ficará disponível para ele.',
+  tool_imported_disabled: 'Ferramenta com código chegou DESLIGADA. Leia o código e ligue-a manualmente se confiar nela.',
+  tool_replaced_disabled: 'Ferramenta com código foi SUBSTITUÍDA pela do pacote e ficou DESLIGADA até você ligá-la de novo.',
+  tool_code_not_accepted: 'O pacote traz código de ferramenta e a confirmação não foi dada — nada foi gravado.',
+  tool_has_dependencies: 'A ferramenta pede pacotes pip: eles serão instalados quando você a ligar e reiniciar.',
+  override_tool_unknown: 'Ajuste de uma ferramenta que não está registrada aqui (plugin ausente?) — pulado.',
   media_not_included: 'O pacote não traz o arquivo de algumas mensagens — entram só com o texto.',
   media_missing: 'O arquivo da mídia não existe mais no disco — a mensagem vai só com o texto.',
   media_out_of_period: 'Mídia fora do período escolhido — a mensagem vai só com o texto.',
@@ -328,14 +342,33 @@ export function confirmNeedsPassword(report) {
   return s === 'locked' || s === 'ok';
 }
 
+/** Quantas ferramentas COM CÓDIGO o pacote traz (a verificação conta mesmo as que a estratégia pularia). */
+export function codeToolsTotal(report) {
+  return (report && report.code_tools_total) | 0;
+}
+
+/** Lista para o popup: `[{name, text}]`. */
+export function codeToolRows(report) {
+  const list = (report && Array.isArray(report.code_tools)) ? report.code_tools : [];
+  const TEXT = { new: 'nova', same: 'igual à que já existe', differs: 'diferente da que já existe' };
+  return list.map((t) => ({
+    name: String(t.name), text: `${TEXT[t.state] || 'nova'}${t.dependencies ? ' · pede pacotes pip' : ''}`,
+  }));
+}
+
 /** Corpo de POST /imports/{id}/confirm. `acknowledged` é o "Revisei" do popup: o servidor também o exige. */
-export function buildConfirmRequest({ report, strategy, password, overwriteSecrets }) {
+export function buildConfirmRequest({ report, strategy, password, overwriteSecrets, acceptCode = false }) {
   if (confirmNeedsPassword(report) && !password) {
     return { error: 'Este pacote tem segredos: informe a senha para importá-los.' };
   }
   const body = { strategy: { ...strategy }, acknowledged: true };
   if (password) body.password = password;
   if (overwriteSecrets) body.overwrite_secrets = true;
+  // Pacote com código de ferramenta: a confirmação é separada e o servidor também a exige.
+  if (codeToolsTotal(report) > 0) {
+    if (!acceptCode) return { error: 'Este pacote traz código de ferramentas de IA: marque que você revisou a lista.' };
+    body.accept_code = true;
+  }
   return { body };
 }
 

@@ -10,9 +10,11 @@ import { STRATEGY_LABELS } from '../../utils/portabilityLogic.js';
 const html = htm.bind(h);
 
 export function ConfirmImportModal({
-  overwrites = [], options = [], stale = false, busy = false, onConfirm, onCancel,
+  overwrites = [], options = [], codeTools = [], stale = false, busy = false, onConfirm, onCancel,
 }) {
   const [ack, setAck] = useState(false);
+  const [codeAck, setCodeAck] = useState(false);
+  const needsCode = codeTools.length > 0;
   useEffect(() => {
     const onKey = (e) => { if (e.key === 'Escape') onCancel(); };
     window.addEventListener('keydown', onKey);
@@ -44,6 +46,22 @@ export function ConfirmImportModal({
           </div>` : html`
           <p class="text-[13px] text-wa-secondary">Nada será substituído: só o que falta é criado ou completado.</p>`}
 
+        ${needsCode ? html`
+          <div class="rounded-md border border-red-500/40 bg-red-500/10 py-2 px-3" role="alert">
+            <p class="text-[13px] font-medium text-red-700">Este pacote traz CÓDIGO PYTHON de ferramentas de IA:</p>
+            <ul class="list-disc pl-5 mt-1">
+              ${codeTools.map((t) => html`<li key=${t.name} class="text-[13px] text-red-700"><strong>${t.name}</strong> — ${t.text}</li>`)}
+            </ul>
+            <p class="text-[12px] text-red-700 mt-1">
+              Elas chegam <strong>desligadas</strong> e nada roda agora. Só ligue uma depois de ler o código na tela de
+              ferramentas: ligada, ela roda com acesso total a este servidor a cada reinício.
+            </p>
+            <label class="flex items-start gap-2 text-[13px] text-red-700 mt-2 cursor-pointer">
+              <input type="checkbox" class="mt-1" checked=${codeAck} onChange=${(e) => setCodeAck(e.target.checked)} />
+              <span>Entendo que o pacote traz código e quero importá-lo desligado</span>
+            </label>
+          </div>` : null}
+
         ${options.length ? html`
           <div class="rounded-md border border-wa-border py-2 px-3">
             <p class="text-[13px] font-medium text-wa-text">Opções ligadas:</p>
@@ -64,7 +82,7 @@ export function ConfirmImportModal({
         <div class="flex gap-2 justify-end">
           <button type="button" onClick=${onCancel}
             class="px-4 py-2 rounded-lg text-sm text-wa-text hover:bg-wa-hover cursor-pointer">Voltar</button>
-          <button type="button" onClick=${onConfirm} disabled=${!ack || busy}
+          <button type="button" onClick=${() => onConfirm(codeAck)} disabled=${!ack || busy || (needsCode && !codeAck)}
             class="bg-wa-teal text-white text-sm font-medium rounded-lg py-2 px-4 hover:opacity-90 disabled:opacity-50 cursor-pointer">
             ${busy ? 'Iniciando…' : 'Iniciar importação'}</button>
         </div>

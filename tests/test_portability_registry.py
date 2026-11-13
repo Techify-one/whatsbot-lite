@@ -173,5 +173,22 @@ def test_every_scope_entity_has_a_strategy_entry():
         for e in ents:
             assert e in reg.SUPPORTED_STRATEGIES, (sc, e)
 
+def test_code_is_never_merged_and_only_ai_tools_carry_code():
+    """Código não se "mescla": ou acrescenta a que falta, ou troca (e só com 'substituir')."""
+    assert reg.SUPPORTED_STRATEGIES["ai_tools"] == (reg.SKIP, reg.OVERWRITE)
+    assert reg.default_strategy("ai_tools") == reg.SKIP          # trocar código é escolha explícita, nunca o padrão
+    assert reg.CODE_BEARING_ENTITIES == {"ai_tools"}
+    with pytest.raises(ValueError):
+        reg.validate_strategy({"ai_tools": "merge"}, ["ai_tools"])
+
+def test_agents_scope_is_in_dependency_order_and_never_carries_credentials():
+    from portability.handlers import IMPORT_ORDER
+    ents = reg.SCOPES["agents"]
+    assert "ai_credentials" not in ents
+    order = [IMPORT_ORDER.index(e) for e in ents]
+    assert order == sorted(order)
+    # referências: variável/prompt/ferramenta antes do agente que as usa; ajuste por último
+    assert IMPORT_ORDER.index("ai_tools") < IMPORT_ORDER.index("ai_agents") < IMPORT_ORDER.index("tool_overrides")
+
 if __name__ == "__main__":
     sys.exit(pytest.main([__file__, "-q"]))

@@ -85,7 +85,7 @@ test('export: fotos de perfil vêm DESLIGADAS e só viajam quando ligadas com co
 
 test('escopos oferecidos são exatamente os do servidor, sem os do Pro', async () => {
     const {SCOPES} = await load();
-    assert.deepEqual(SCOPES.map((s) => s.id).sort(), ['catalog', 'conversations', 'settings']);
+    assert.deepEqual(SCOPES.map((s) => s.id).sort(), ['agents', 'catalog', 'conversations', 'settings']);
 });
 
 // ── relatório ───────────────────────────────────────────────────────────────
@@ -295,4 +295,26 @@ test('dayStart rejeita data inexistente', async () => {
     assert.equal(dayStart(''), null);
     assert.equal(dayStart('01/02/2026'), null);
     assert.ok(dayEnd('2026-02-01') > dayStart('2026-02-01'));
+});
+
+// ── Fase 2: ferramentas com código ──────────────────────────────────────────
+
+test('pacote com código de ferramenta: o confirm exige o "entendo" e manda accept_code', async () => {
+    const {buildConfirmRequest, codeToolsTotal, codeToolRows} = await load();
+    const r = {...report(), code_tools_total: 2,
+        code_tools: [{name: 'a_tool', state: 'new', dependencies: true}, {name: 'b_tool', state: 'differs', dependencies: false}]};
+    assert.equal(codeToolsTotal(r), 2);
+    assert.match(buildConfirmRequest({report: r, strategy: {}}).error, /código/);
+    assert.match(buildConfirmRequest({report: r, strategy: {}, acceptCode: false}).error, /código/);
+    assert.equal(buildConfirmRequest({report: r, strategy: {}, acceptCode: true}).body.accept_code, true);
+    const rows = codeToolRows(r);
+    assert.equal(rows[0].name, 'a_tool');
+    assert.match(rows[0].text, /pip/);
+    assert.match(rows[1].text, /diferente/);
+});
+
+test('pacote sem código: o corpo do confirm não leva accept_code', async () => {
+    const {buildConfirmRequest, codeToolsTotal} = await load();
+    assert.equal(codeToolsTotal(report()), 0);
+    assert.equal('accept_code' in buildConfirmRequest({report: report(), strategy: {}}).body, false);
 });

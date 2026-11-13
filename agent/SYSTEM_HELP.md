@@ -313,7 +313,7 @@ Antes de tudo, defina a **senha do painel**: o pacote leva conversas e a chave d
 
 Para **exportar**:
 
-1. Marque o que levar: **Configurações do sistema**, **Tags** e/ou **Contatos e conversas** (contatos, observações e todo o histórico de mensagens).
+1. Marque o que levar: **Configurações do sistema**, **Tags**, **Contatos e conversas** (contatos, observações e todo o histórico de mensagens) e/ou **Agentes de IA** (agentes, prompts, variáveis, ajustes de ferramentas e ferramentas com código).
 2. Se marcar conversas, escolha se leva os **arquivos de mídia** (deixa o pacote bem maior; dá para limitar por período) e as **fotos de perfil** (normalmente desnecessário, o WhatsBot baixa de novo sozinho).
 3. Para levar a chave de API, marque **Incluir segredos** e crie uma senha do pacote (mínimo de 12 caracteres, diferente da senha do painel). Guarde essa senha: sem ela não há como recuperar a chave.
 4. Clique em **Gerar pacote**, espere terminar e clique em **Baixar pacote**. O pacote fica disponível por 24 horas.
@@ -323,6 +323,8 @@ Para **importar**:
 1. Em **Importar**, escolha o arquivo .zip (informe a senha do pacote se ele tiver segredos) e clique em **Enviar e verificar**.
 2. Veja a **prévia**: ela mostra quantos itens seriam criados, alterados ou deixados como estão, sem gravar nada. Em **Se já existir neste servidor**, escolha o que fazer com o que já existe aqui: só adicionar o que falta, completar o que existe ou substituir pelo do pacote. Mensagens nunca são alteradas nem duplicadas. Use **Recalcular prévia** depois de mudar uma opção.
 3. Clique em **Confirmar importação**, leia o resumo do que será substituído, marque **Revisei e quero iniciar** e confirme. Não há como desfazer.
+
+Sobre **Agentes de IA**: as ferramentas com código são programas em Python. Ao importar, elas chegam **desligadas** e nada roda; o popup lista cada uma e pede a marcação **Entendo que o pacote traz código e quero importá-lo desligado**. Leia o código na tela de ferramentas antes de ligar uma: ligada, ela roda com acesso total ao servidor a cada reinício. Importar agentes não liga o motor de IA. Variáveis cujo nome indica segredo (como `token` ou `senha`) só vão com **Incluir segredos**. As credenciais do modelo não existem no Lite e não viajam.
 
 Detalhes importantes: as conversas importadas entram sem notificação (não aparecem como não lidas e a IA não responde a elas). A senha do painel, a identidade da instalação, o estado do WhatsApp e o proxy não são levados; depois de importar em outro servidor, conecte o WhatsApp lá pelo QR. Se o servidor reiniciar no meio de uma importação, ela fica **Interrompida** e dá para **Continuar** de onde parou sem duplicar nada. Se algum registro der erro, use **Ver erros** na prévia ou em **Operações recentes**.
 

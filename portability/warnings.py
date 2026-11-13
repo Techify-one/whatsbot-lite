@@ -31,6 +31,14 @@ WARNING_CODES: dict[str, str] = {
     "tag_unknown": "tag do contato que não existe no destino nem no pacote — não aplicada",
     # mensagens
     "contact_unavailable": "o contato da mensagem não foi importado — mensagem ignorada",
+    # motor de IA
+    "agent_prompt_missing": "agente aponta para um prompt que não existe aqui nem veio no pacote",
+    "agent_tool_missing": "agente lista uma ferramenta que não existe aqui nem veio no pacote",
+    "tool_imported_disabled": "ferramenta com código entrou DESLIGADA (precisa ser ligada à mão)",
+    "tool_replaced_disabled": "ferramenta com código foi substituída e ficou DESLIGADA",
+    "tool_code_not_accepted": "o pacote traz código de ferramenta e a confirmação não foi dada — não gravado",
+    "tool_has_dependencies": "a ferramenta pede pacotes pip, instalados quando for ligada",
+    "override_tool_unknown": "ajuste de uma ferramenta que não está registrada aqui — pulado",
     # mídia
     "media_not_included": "o pacote não traz o arquivo da mensagem — entra só com o texto",
     "media_missing": "o arquivo não existe mais no disco da origem — vai só o texto",

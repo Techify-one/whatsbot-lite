@@ -26,6 +26,7 @@ from sqlalchemy import text
 from portability import avatars as avatars_io
 from portability import crypto
 from portability import entities as ents
+from portability import entities_ai as _ai
 from portability import jobs
 from portability import media as media_io
 from portability import registry as reg
@@ -45,7 +46,8 @@ _PERSONAL_ENTITIES = frozenset({"contacts", "messages"})
 
 #: Ordem GLOBAL de import (dependências primeiro): config e tags antes de contatos; a mensagem aponta
 #: para o contato do pacote, então vem depois dele. É um subconjunto do que o pacote traz.
-IMPORT_ORDER = ("config", "tags", "contacts", "messages")
+IMPORT_ORDER = ("config", "tags", "contacts", "messages", "ai_variables", "ai_prompts", "ai_tools",
+                "ai_agents", "tool_overrides")
 
 # ── helpers ─────────────────────────────────────────────────────────────────
 
@@ -339,6 +341,7 @@ def run_dryrun(ctx: JobContext) -> dict:
             "warnings": summarize_warnings(env.warnings),
             "notes": notes,
             "already_imported": jobs.find_imported(ctx.params.get("package_sha256") or "") or None,
+            **_ai.code_tools_report(env),
         }
 
 # ═══ import ═════════════════════════════════════════════════════════════════
@@ -347,7 +350,8 @@ def run_import(ctx: JobContext) -> dict:
     with _open_package(ctx) as reader:
         _check_integrity(reader)
         secrets, secrets_state = _load_secrets(ctx, reader)
-        env = ents.Env(secrets=secrets, overwrite_secrets=bool(ctx.params.get("overwrite_secrets")))
+        env = ents.Env(secrets=secrets, overwrite_secrets=bool(ctx.params.get("overwrite_secrets")),
+                       accept_code=bool(ctx.params.get("accept_code")))
         names = _present_entities(reader)
         strategy = _chosen_strategy(ctx.params.get("strategy"), names)
         jobs.clear_errors(ctx.id)
@@ -360,7 +364,7 @@ def run_import(ctx: JobContext) -> dict:
         post = _postprocess(ctx, env)
         report = {"entities": tallies, "errors": env.error_sink.summary(), "strategy": strategy,
                   "secrets": secrets_state, "warnings": summarize_warnings(env.warnings),
-                  "post": post}
+                  "post": post, **_ai.code_tools_report(env)}
         _log_done(ctx, report, reader.manifest, time.time() - started)
         return report
 
@@ -392,6 +396,9 @@ def _postprocess(ctx: JobContext, env: ents.Env) -> dict:
                 default_ai_enabled=settings.get("default_ai_enabled", True),
                 ai_engine_enabled=settings.get("ai_engine_enabled", False),
             )
+        if env.cache.get("overrides_changed") and handler is not None:
+            handler.refresh_tool_overrides()            # ferramentas ligadas/desligadas/renomeadas
+            out["tool_overrides_reloaded"] = True
         if env.cache.get("tags_changed") and handler is not None:
             handler.tag_registry._load()
             out["tags_reloaded"] = True

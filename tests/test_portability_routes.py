@@ -382,6 +382,52 @@ def test_confirm_imports_once_and_a_second_confirm_is_refused(env):
     assert again.status_code == 409
     assert len([j for j in jobs.list_recent() if j["kind"] == "import"]) == 1
 
+def _verified_with_code(env, h) -> tuple[str, bytes]:
+    """Como ``_verified``, mas o pacote traz uma ferramenta de IA com código."""
+    from db.repositories import tool_repo
+    c = env["client"]
+    tool_repo.save("rota_tool", description="d", code="x = 1\n", dependencies=[], enabled=True)
+    blob = _download(c, h, _export(c, h, scopes=("agents",))["id"])
+    tool_repo.delete("rota_tool")
+    r = _upload(c, h, blob)
+    assert r.status_code == 202, r.text
+    dry = r.json()["data"]
+    _drain()
+    done = c.get(f"/api/portability/jobs/{dry['id']}", headers=h).json()["data"]
+    assert done["state"] == State.SUCCEEDED, done
+    assert done["report"]["code_tools_total"] == 1
+    return dry["id"], blob
+
+def test_confirm_refuses_a_package_with_code_unless_the_code_was_accepted(env):
+    from db.repositories import tool_repo
+    c, h = env["client"], _set_panel_password()
+    dry_id, _ = _verified_with_code(env, h)
+    r = c.post(f"/api/portability/imports/{dry_id}/confirm", json={"acknowledged": True}, headers=h)
+    assert r.status_code == 400 and r.json()["error_code"] == "code_not_accepted"
+    assert [j for j in jobs.list_recent() if j["kind"] == "import"] == []     # nem criou o job
+    assert tool_repo.get("rota_tool") is None
+    r = c.post(f"/api/portability/imports/{dry_id}/confirm",
+               json={"acknowledged": True, "accept_code": "talvez"}, headers=h)
+    assert r.status_code == 400                                               # "talvez" não vale
+
+def test_accepted_code_is_imported_disabled_through_the_route(env):
+    from db.repositories import tool_repo
+    c, h = env["client"], _set_panel_password()
+    dry_id, _ = _verified_with_code(env, h)
+    r = c.post(f"/api/portability/imports/{dry_id}/confirm",
+               json={"acknowledged": True, "accept_code": True}, headers=h)
+    assert r.status_code == 202, r.text
+    assert "accept_code" not in r.json()["data"] and "params" not in r.json()["data"]
+    _drain()
+    t = tool_repo.get("rota_tool")
+    assert t is not None and t["enabled"] is False and tool_repo.list_enabled() == []
+
+def test_a_package_without_code_does_not_need_accept_code(env):
+    c, h = env["client"], _set_panel_password()
+    dry_id, _ = _verified(env, h)
+    r = c.post(f"/api/portability/imports/{dry_id}/confirm", json={"acknowledged": True}, headers=h)
+    assert r.status_code == 202, r.text
+
 def test_confirm_refuses_a_verification_that_has_not_finished(env):
     c, h = env["client"], _set_panel_password()
     _seed_tags()
