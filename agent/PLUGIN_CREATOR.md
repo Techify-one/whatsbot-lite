@@ -476,3 +476,41 @@ def test_confirmed_order_requires_items():
 ```
 
 Não declare conclusão antes de receber `valid: true`.
+
+## Intenções assistidas: contrato versão 1
+
+Plugins existentes continuam compatíveis. Um plugin pode declarar `intents` e `intent_tools` no `plugin.yaml`; o core registra intenções novas desabilitadas. A administração habilita, escolhe escopos e autoriza as ferramentas em `/intents`. Nunca considere a instalação como aprovação de ações.
+
+```yaml
+intent_tools:
+  agenda_disponibilidade:
+    effect: read
+    capability: calendar.availability
+  agenda_criar_evento:
+    effect: write
+    capability: calendar.create
+    idempotent: true
+intents:
+  - id: agenda_agendar_reuniao
+    contract_version: 1
+    name: Agendar reunião
+    description: Pedido atual para marcar reunião
+    positive_examples: ["Podemos marcar uma reunião amanhã?"]
+    negative_examples: ["A reunião já foi marcada"]
+    tools: [agenda_disponibilidade, agenda_criar_evento]
+    policy: owner_approval
+    instructions: Confirme data, fuso, participantes e disponibilidade real.
+    required_data: [data, fuso, participantes]
+    required_capabilities: [calendar.availability, calendar.create]
+    success_criteria: Evento criado com sucesso pela integração
+    cancel_criteria: Pedido cancelado ou intervenção humana
+    enabled: false
+```
+
+O prefixo do ID da intenção deve ser o ID do plugin seguido de `_` (exemplo: plugin `agenda`). As ferramentas devem estar registradas pelo próprio plugin. Metadados desconhecidos não concedem permissões: por padrão ferramentas são tratadas como escrita. `idempotent` descreve a capacidade do plugin; implemente deduplicação efetiva na integração, não apenas no manifesto. A autorização do core continua sendo aplicada.
+
+A definição aceita `priority` (-100..100), `min_confidence` (0,5..1), `contacts`, `allow_all_contacts`, `allow_groups`, `tool_parameters` (objeto por nome de ferramenta), `timeout_seconds` (60..86400), `policy` (`automatic`, `contact_confirmation`, `owner_approval`, `deny`), `ambiguous_policy` e `agent_id`. Confira o contrato atual em `agent/intent_schema.py`; campos desconhecidos são rejeitados. `required_capabilities` lista capacidades que as ferramentas selecionadas devem fornecer; sem elas a tarefa fica bloqueada por integração pendente. Os parâmetros fixos do administrador prevalecem sobre os argumentos sugeridos pelo modelo. Uma ferramenta removida/desabilitada não pode ser chamada por uma intenção antiga.
+
+Retorne resultados serializáveis como JSON, com `ok: true` ou `success: true` somente após sucesso real. Não retorne sucesso ao apenas solicitar uma operação. Integrações de calendário devem consultar dados reais, tratar fusos e conflitos e retornar o evento/link verdadeiro; sem configuração, retornar erro explícito. Não registrar credenciais em resultados, logs ou mensagens. Operações de escrita ficam aguardando a aprovação específica do proprietário, com ferramenta e argumentos apresentados no painel.
+
+Consulte `docs/ASSISTED_INTENTS.md` para arquitetura, configuração, limitações e APIs.

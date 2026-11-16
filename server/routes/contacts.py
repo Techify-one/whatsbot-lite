@@ -415,6 +415,7 @@ def register_routes(app, deps):
     @app.post("/api/contacts/{phone}/send")
     async def send_to_contact(phone: str, body: dict):
         """Send a manual message to a contact (operator-initiated, no LLM)."""
+        if getattr(deps, "intent_runtime", None): deps.intent_runtime.owner_intervened(phone)
         message = (body.get("message") or "").strip()
         if not message:
             return _err("Campo 'message' é obrigatório.")
@@ -897,6 +898,7 @@ def register_routes(app, deps):
     @app.post("/api/contacts/{phone}/retry-send")
     async def retry_send_to_contact(phone: str, body: dict):
         """Retry sending a message that previously failed."""
+        if getattr(deps, "intent_runtime", None): deps.intent_runtime.owner_intervened(phone)
         message = (body.get("message") or "").strip()
         if not message:
             return _err("Campo 'message' é obrigatório.")
@@ -955,6 +957,7 @@ def register_routes(app, deps):
         caption: str = Form(""),
     ):
         """Send an image to a contact (operator-initiated)."""
+        if getattr(deps, "intent_runtime", None): deps.intent_runtime.owner_intervened(phone)
         suffix = Path(image.filename or "img.png").suffix or ".png"
         dest = statics_senditems_dir / f"{int(time.time() * 1000)}{suffix}"
         content = await image.read()
@@ -1027,6 +1030,7 @@ def register_routes(app, deps):
         audio: UploadFile = File(...),
     ):
         """Send an audio file to a contact (operator-initiated)."""
+        if getattr(deps, "intent_runtime", None): deps.intent_runtime.owner_intervened(phone)
         suffix = Path(audio.filename or "voice.ogg").suffix or ".ogg"
         dest = statics_senditems_dir / f"{int(time.time() * 1000)}{suffix}"
         content = await audio.read()
@@ -1099,6 +1103,7 @@ def register_routes(app, deps):
         caption: str = Form(""),
     ):
         """Send an arbitrary file (document) to a contact (operator-initiated)."""
+        if getattr(deps, "intent_runtime", None): deps.intent_runtime.owner_intervened(phone)
         filename = document.filename or "arquivo"
         safe_name = Path(filename).name
         suffix = Path(safe_name).suffix

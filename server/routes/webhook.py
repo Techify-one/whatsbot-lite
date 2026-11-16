@@ -1,5 +1,6 @@
 """Webhook endpoint — receives real-time messages from GOWA."""
 
+import hashlib
 import asyncio
 import json
 import logging
@@ -511,12 +512,13 @@ def register_routes(app, deps):
 
     # ── Reply Splitting & Sending ─────────────────────────────────
 
-    async def _send_reply(phone: str, reply: str):
+    async def _send_reply(phone: str, reply: str, intent_task_id: str | None = None):
         """Send reply (possibly split into multiple parts) and broadcast."""
         # Plugin filter: full raw reply before split
         reply = await apply_filter("filter.reply.raw", reply, {"phone": phone})
         if reply is None:
             logger.info("[Batch] reply for %s aborted by filter.reply.raw", phone)
+            if intent_task_id: raise RuntimeError("intent_reply_filtered")
             return
 
         split_enabled = settings.get("split_messages", True)
@@ -530,6 +532,7 @@ def register_routes(app, deps):
         parts = await apply_filter("filter.reply.parts", parts, {"phone": phone})
         if parts is None or not parts:
             logger.info("[Batch] reply for %s aborted by filter.reply.parts", phone)
+            if intent_task_id: raise RuntimeError("intent_reply_filtered")
             return
 
         # Initial response delay (simulates typing)
@@ -539,6 +542,10 @@ def register_routes(app, deps):
 
         sent_parts = []  # collect (part_text, msg_id) for saving after send
         for i, part in enumerate(parts):
+            if intent_task_id:
+                current = intent_repo.get_task(intent_task_id)
+                if not current or current['status'] not in {'executing', 'waiting_contact'} or intent_mode(settings) != 'assisted':
+                    raise RuntimeError('intent_no_longer_active')
             # Plugin filter: each part right before send (signature, formatting, redact)
             part = await apply_filter(
                 "filter.reply.part", part,
@@ -546,6 +553,7 @@ def register_routes(app, deps):
             )
             if part is None:
                 logger.info("[Batch] part %d for %s skipped by filter.reply.part", i + 1, phone)
+                if intent_task_id: raise RuntimeError("intent_reply_filtered")
                 continue
 
             if i > 0:
@@ -573,8 +581,15 @@ def register_routes(app, deps):
 
             send_result = None
             try:
-                send_result = await asyncio.to_thread(
-                    gowa_client.send_message, phone, send_text, mentions)
+                def guarded_send():
+                    if intent_task_id:
+                        current = intent_repo.get_task(intent_task_id)
+                        if not current or current['status'] not in {'executing', 'waiting_contact'} or intent_mode(settings) != 'assisted':
+                            raise RuntimeError('intent_no_longer_active')
+                    if intent_task_id and not agent_handler._get_contact(phone).can_send:
+                        raise RuntimeError('group_send_not_allowed')
+                    return gowa_client.send_message(phone, send_text, mentions)
+                send_result = await asyncio.to_thread(guarded_send)
                 await atrack_step("gowa_send", {"phone": phone, "part": i + 1, "total_parts": len(parts)})
             except GOWASendError as e:
                 logger.error("[Batch] Send failed for %s (part %d/%d): %s", phone, i + 1, len(parts), e)
@@ -586,10 +601,17 @@ def register_routes(app, deps):
                     "phone": phone,
                     "message": {"role": "error", "content": f"Falha ao enviar: {e}", "ts": time.time()},
                 })
+                if intent_task_id: raise RuntimeError("intent_send_failed") from None
                 return
 
             part_msg_id = extract_msg_id(send_result)
             sent_parts.append((part, part_msg_id))
+            if intent_task_id:
+                # Persist each acknowledged part before a later part can be cancelled.
+                await asyncio.to_thread(agent_handler.save_assistant_message, phone, part,
+                                        msg_id=part_msg_id, status="sent")
+                contact = agent_handler._contacts.get(phone)
+                if contact: await asyncio.to_thread(contact.increment_unread_ai)
 
             # Broadcast each part to frontend individually
             await ws_manager.broadcast("new_message", {
@@ -607,7 +629,7 @@ def register_routes(app, deps):
             })
 
         # Save each part as a separate message to preserve split across page refresh
-        for part, part_msg_id in sent_parts:
+        for part, part_msg_id in ([] if intent_task_id else sent_parts):
             try:
                 await asyncio.to_thread(agent_handler.save_assistant_message, phone, part,
                                         msg_id=part_msg_id, status="sent")
@@ -843,11 +865,34 @@ def register_routes(app, deps):
         finally:
             state.sending[phone] = False
 
+    from agent.intent_runtime import IntentRuntime
+    from agent.intent_config import mode as intent_mode
+    from db.repositories import intent_repo
+
+    async def _send_intent_reply(phone: str, reply: str):
+        await _wait_typing_paused(phone)
+        task = intent_repo.active_task(phone)
+        if not task or task['status'] not in {'executing', 'waiting_contact'} or intent_mode(settings) != 'assisted':
+            raise RuntimeError('intent_no_longer_active')
+        state.sending[phone] = True
+        try:
+            await _send_reply(phone, reply, intent_task_id=task["id"])
+        finally:
+            state.sending[phone] = False
+
+    def _intent_context(contact):
+        from db.repositories import message_repo
+        return [{"role":"user" if m["role"] == "transcription" else m["role"], "content":str(m.get("content") or "")}
+                for m in message_repo.get_context(contact.id, 50)
+                if m["role"] in {"user", "assistant", "transcription"}]
+
+    deps.intent_runtime = IntentRuntime(settings, agent_handler, _send_intent_reply)
+
     def _schedule_orchestrator(phone: str):
         """Cancel existing orchestrator (unless mid-send) and spawn a new one."""
         existing = state.processing_tasks.get(phone)
         if existing and not existing.done():
-            if state.sending.get(phone):
+            if state.sending.get(phone) or intent_mode(settings) == "assisted":
                 # Mid-send — don't cancel. The current orchestrator will spawn the next
                 # cycle automatically when it finishes sending (sees pending_messages).
                 return
@@ -928,7 +973,11 @@ def register_routes(app, deps):
                         "source": "batch_text",
                         "ts": time.time(),
                     })
-                    if contact.ai_enabled and settings.get("auto_reply", True):
+                    if intent_mode(settings) == "assisted":
+                        await deps.intent_runtime.handle(
+                            phone, combined, phone + ':' + '|'.join(text_msg_ids),
+                            context=_intent_context(contact), is_group=contact.is_group)
+                    elif contact.ai_enabled and intent_mode(settings) == "automatic":
                         if not agent_handler.api_key:
                             notice = "[WhatsBot-Lite] API key não configurada."
                             contact.add_message("system_notice", notice)
@@ -1052,7 +1101,13 @@ def register_routes(app, deps):
                             },
                         })
 
-                if not contact.ai_enabled or not settings.get("auto_reply", True):
+                if intent_mode(settings) == "assisted":
+                    if transcription:
+                        await deps.intent_runtime.handle(phone, transcription,
+                            phone + ':' + str(item.get('msg_id', '')),
+                            context=_intent_context(contact) + [{'role':'user','content':transcription}], is_group=contact.is_group)
+                    continue
+                if not contact.ai_enabled or intent_mode(settings) != "automatic":
                     continue
 
                 if not agent_handler.api_key:
@@ -1606,6 +1661,7 @@ def register_routes(app, deps):
 
         # Sync outgoing messages sent from phone (not via our app)
         if is_from_me:
+            deps.intent_runtime.owner_intervened(phone)
             # media_type/media_path already resolved by _extract_media above.
 
             # Plugin filter: mirror of `filter.message.before_save` but for
@@ -1691,6 +1747,17 @@ def register_routes(app, deps):
             return _ok({"status": "synced"})
 
         # media_type/media_path already resolved by _extract_media above.
+
+        # Persistent per-message dedup is independent of batch composition/reconnects.
+        if intent_mode(settings) == 'assisted':
+            stable_id = data.get('id') or data.get('Id') or data.get('message_id')
+            if stable_id and not intent_repo.claim_event('inbound:' + hashlib.sha256((phone + ':' + str(stable_id)).encode()).hexdigest()):
+                return _ok({'status': 'duplicate'})
+            if not stable_id:
+                contact = agent_handler._get_contact(phone)
+                contact.add_message('user', text or '[Mídia recebida]', msg_id=msg_id,
+                                    media_type=media_type, media_path=media_path)
+                return _ok({'status': 'saved_without_stable_id'})
 
         # For groups: prefix text with sender name and check @mention
         display_text = text
@@ -1871,7 +1938,7 @@ def register_routes(app, deps):
         # For group messages without mention: save to history but don't trigger AI.
         # Persist media_type/media_path so the chat panel can render the audio/image/document
         # player on reload, the same way it does for private chats.
-        if skip_ai:
+        if skip_ai and intent_mode(settings) != "assisted":
             # Transcribe audio/describe image even though the AI won't reply, so the
             # transcription card still appears in the panel — matches private-chat UX.
             transcription = ""

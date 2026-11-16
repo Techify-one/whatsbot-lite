@@ -396,3 +396,21 @@ O repositório WhatsBot foi renomeado para WhatsBot-Lite. O atualizador consulta
 diretamente a última release estável de `Techify-one/whatsbot-lite`, não a branch
 main. Depois que uma nova release é publicada, ela pode levar até cinco minutos
 para aparecer devido ao cache da consulta. Abra [Atualizar WhatsBot-Lite]({{base_url}}/painel?aba=sistema#update).
+
+## Modo assistido por intenções
+
+Abra a engrenagem → **Intenções** para configurar a classificação silenciosa e tarefas temporárias: [Abrir Intenções]({{base_url}}/intents).
+
+- **Desativado:** não responde por IA nem inicia intenções; as outras funções continuam.
+- **Assistido por Intenções:** só trabalha quando uma intenção habilitada corresponde a um pedido atual e autorizado. Sem correspondência, fica silencioso.
+- **Automático:** mantém o atendimento normal por IA. A atualização não ativa o modo assistido nem novas intenções automaticamente.
+
+Em **Modo e classificador**, configure o provedor e a chave. É necessário também configurar a IA executora e uma senha de acesso ao painel em [Configurações]({{base_url}}/settings). A chave não volta à tela; deixe o campo vazio para mantê-la. Trocar de provedor não gera fallback automático para outra API paga.
+
+Em **Nova intenção**, preencha nome, identificador, descrição, exemplos positivos e negativos, instruções, dados necessários e critérios de conclusão/cancelamento. Selecione os contatos autorizados ou autorize explicitamente todos; grupos precisam de permissão separada. Escolha somente as ferramentas necessárias, seus parâmetros fixos e a política de execução. Salve e habilite quando estiver pronto. Instalar um plugin não habilita suas intenções sozinho.
+
+**Teste de classificação** não envia mensagens nem executa ferramentas, mas consulta a API configurada e pode consumir crédito. Em **Tarefas e histórico**, consulte decisões, pause, cancele ou transfira para uma pessoa. Antes de **Aprovar**, revise o nome da ferramenta, a conversa e todos os parâmetros exibidos. Operações de escrita precisam de aprovação específica mesmo quando a tarefa tem início automático. Se você responder manualmente, a tarefa transfere o atendimento para você.
+
+Para agendar reuniões, instale/configure um plugin real de calendário e associe as ferramentas de disponibilidade e criação. Sem integração, o sistema não pode consultar horários nem criar eventos e não deve afirmar que agendou. Nenhum calendário nativo é instalado automaticamente por esta funcionalidade.
+
+Em Intenções, “Últimas decisões silenciosas” mostra classificações/abstenções e falhas recentes sem texto privado das mensagens. Resultado externo incerto mantém a conversa bloqueada; verifique na integração antes de confirmar reconciliação e cancelar/transferir.

@@ -440,3 +440,41 @@ Index("idx_portability_errors_job", portability_job_errors.c.job_id, portability
 # Set of core table names — used by the SQLite → Postgres migration helper to
 # distinguish what belongs to the app vs. plugin-owned tables.
 CORE_TABLES = frozenset(t.name for t in metadata.sorted_tables)
+
+
+# Intent assistance is installation-scoped: each Lite instance has its own DB.
+intents = Table("intents", metadata,
+    Column("id", String(100), primary_key=True),
+    Column("definition", Text, nullable=False),
+    Column("updated_at", Float, nullable=False))
+intent_tasks = Table("intent_tasks", metadata,
+    Column("id", String(36), primary_key=True),
+    Column("phone", Text, nullable=False),
+    Column("active_slot", Text, unique=True),
+    Column("intent_id", String(100), nullable=False),
+    Column("status", String(30), nullable=False),
+    Column("payload", Text, nullable=False),
+    Column("created_at", Float, nullable=False),
+    Column("updated_at", Float, nullable=False),
+    Column("expires_at", Float, nullable=False))
+intent_events = Table("intent_events", metadata,
+    Column("key", String(256), primary_key=True),
+    Column("created_at", Float, nullable=False))
+intent_operations = Table("intent_operations", metadata,
+    Column("task_id", String(36), primary_key=True),
+    Column("key", String(256), primary_key=True),
+    Column("status", String(30), nullable=False),
+    Column("result", Text),
+    Column("created_at", Float, nullable=False))
+intent_audit = Table("intent_audit", metadata,
+    Column("id", Integer, primary_key=True, autoincrement=True),
+    Column("task_id", String(36), nullable=False),
+    Column("event", String(100), nullable=False),
+    Column("details", Text, nullable=False),
+    Column("created_at", Float, nullable=False))
+
+intent_limits = Table("intent_limits", metadata,
+    Column("key", String(100), primary_key=True),
+    Column("used", Float, nullable=False, server_default="0"))
+# Include newly added tables in portability's core registry.
+CORE_TABLES = frozenset(t.name for t in metadata.sorted_tables)

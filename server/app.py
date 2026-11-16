@@ -17,7 +17,7 @@ from server.helpers import _get_web_dir
 from server.pwa import register_pwa_routes
 from server.state import MemoryLogHandler, ConnectionManager, AppState
 from server.background import start_gowa_task, status_poll_loop, qr_poll_loop, avatar_fetch_task, gowa_update_check_loop, ai_reactivation_loop, portability_jobs_loop
-from server.routes import files as files_routes, logs, sandbox, config, whatsapp, websocket, usage, contacts, webhook, auth, tags, executions, update, setup as setup_routes, plugins as plugins_routes, tools as tools_routes, admin as admin_routes, ai_engine as ai_engine_routes, gowa_update as gowa_update_routes, chat as chat_routes, portability as portability_routes
+from server.routes import intents as intents_routes, files as files_routes, logs, sandbox, config, whatsapp, websocket, usage, contacts, webhook, auth, tags, executions, update, setup as setup_routes, plugins as plugins_routes, tools as tools_routes, admin as admin_routes, ai_engine as ai_engine_routes, gowa_update as gowa_update_routes, chat as chat_routes, portability as portability_routes
 from db.repositories import tool_override_repo
 from agent import group_mentions, agent_factory
 from agent import ai_tool_installer
@@ -172,6 +172,7 @@ def create_app(
     async def lifespan(app: FastAPI):
         import time as _time
         state.stop_event.clear()
+        deps.intent_runtime.recover()
         _loop = asyncio.get_running_loop()
         _set_plugin_runtime(ws_manager, _loop, gowa_client, agent_handler)
         _set_events_runtime(_loop, agent_handler)
@@ -189,7 +190,17 @@ def create_app(
             "plugin_ids": list(registry.loaded.keys()),
             "ts": _time.time(),
         })
+        async def expire_intents() -> None:
+            from db.repositories import intent_repo
+            import time
+            while not state.stop_event.is_set():
+                for task in await asyncio.to_thread(intent_repo.list_tasks, 10000):
+                    if task['active_slot'] and not task['payload'].get('outcome_unknown') and task['expires_at'] <= time.time():
+                        await asyncio.to_thread(intent_repo.transition, task['id'], [task['status']], 'expired')
+                await asyncio.sleep(30)
+
         tasks = [
+            asyncio.create_task(expire_intents()),
             asyncio.create_task(start_gowa_task(deps)),
             asyncio.create_task(status_poll_loop(deps)),
             asyncio.create_task(qr_poll_loop(deps)),
@@ -245,7 +256,7 @@ def create_app(
         if s.get("path", "").startswith("/")
     }
     _SPA_PATHS = (
-        {"/", "/painel", "/sandbox", "/costs", "/executions", "/plugins", "/tools", "/chat", "/wizard", "/arquivos"}
+        {"/", "/painel", "/sandbox", "/costs", "/executions", "/plugins", "/tools", "/intents", "/chat", "/wizard", "/arquivos"}
         | _PLUGIN_SPA_PATHS
     )
 
@@ -315,6 +326,7 @@ def create_app(
     @app.get("/costs")
     @app.get("/executions")
     @app.get("/plugins")
+    @app.get("/intents")
     @app.get("/tools")
     @app.get("/arquivos")
     @app.get("/chat")
@@ -350,6 +362,10 @@ def create_app(
     # broadcast_tool_calls is available via deps.
     auth.register_routes(app, deps)
     webhook.register_routes(app, deps)
+    from agent.intent_schema import register_plugin_intents, ensure_builtin_intents
+    register_plugin_intents(registry, agent_handler)
+    ensure_builtin_intents()
+    intents_routes.register_routes(app, deps)
     logs.register_routes(app, deps)
     sandbox.register_routes(app, deps)
     config.register_routes(app, deps)

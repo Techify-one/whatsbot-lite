@@ -117,6 +117,8 @@ def register_routes(app, deps):
             "gowa_auto_check_enabled",
             "whatsbot_update_notifications_enabled",
         }
+        if "auto_reply" in body and body["auto_reply"] != settings.get("auto_reply", False):
+            settings["intent_mode"] = "automatic" if body["auto_reply"] else "disabled"
         keys_changed = []
         for key, value in body.items():
             if key not in allowed_keys:

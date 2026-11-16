@@ -1,6 +1,10 @@
 {
-  "version": "0.2.23",
+  "version": "0.3.0",
   "changelog": [
+    {
+      "version": "0.3.0",
+      "description": "- Novo modo Assistido por Intenções, opt-in: monitoramento silencioso e tarefas temporárias autorizadas, sem alterar o atendimento automático existente\n- Tela Intenções com cadastro, edição, ferramentas de plugins, escopos, testes sem ação e histórico\n- Classificador Jev/TypeSafe ou endpoint compatível OpenAI configurável, com chave cifrada, limites e sem fallback pago automático\n- Tarefas persistentes, deduplicação, prioridade humana e aprovação de operações sensíveis\n- Contrato de plugins e modelo de agendamento com configuração pendente até integrar calendário real"
+    },
     {
       "version": "0.2.23",
       "description": "- Correção: quando o download do GOWA falhava por lentidão ou queda de conexão, o painel mostrava por engano o aviso de processador antigo e parava de oferecer atualizações. Agora aparece uma mensagem de conexão, a versão atual continua funcionando e dá para tentar de novo\n- O download do GOWA tenta de novo sozinho e aguenta conexões lentas"

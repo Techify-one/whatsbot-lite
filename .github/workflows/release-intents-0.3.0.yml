@@ -1,0 +1,45 @@
+name: Validate and publish assisted intents v0.3.0 once
+on:
+  push:
+    branches: [main]
+    paths: [.github/workflows/release-intents-0.3.0.yml]
+permissions:
+  contents: write
+concurrency:
+  group: release-intents-v0.3.0
+  cancel-in-progress: false
+jobs:
+  publish:
+    if: github.repository == 'Techify-one/whatsbot-lite'
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.sha }}
+          persist-credentials: false
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+      - run: python -m pip install -r requirements.txt
+      - name: Offline integration, migration, security and regression suites
+        run: |
+          python -m compileall -q agent server db plugins
+          python -m pytest -q tests/test_intent_runtime.py tests/test_intents_api.py tests/test_intent_transport.py tests/test_portability_*.py tests/test_plugin_package.py tests/test_plugin_import_route.py
+          python tests/test_endpoints.py
+          python tests/test_gowa_proxy.py
+          python tests/test_provisioning_target.py
+          python tests/test_llm_costing.py
+          node --test tests/*.test.cjs
+          npm ci --prefix tools/css
+          npm run build --prefix tools/css
+          npm run check --prefix tools/css
+          git diff --exit-code -- web/static/css/tailwind.css
+      - name: Publish exact validated main commit
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TARGET_SHA: ${{ github.sha }}
+        run: python tools/publish_intents_release.py
