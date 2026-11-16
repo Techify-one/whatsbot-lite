@@ -1,3 +1,28 @@
+## Atualização v0.3.1: classificação pelo proxy Techify
+
+Para novas configurações, o padrão é **Techify · Decisions**, com Decider Flash V1.2 pré-selecionado, mas o modo continua desativado. Configurações salvas de Jev direto ou LLM JSON permanecem intactas, identificadas como legadas. Não há migração silenciosa de provedor nem envio de uma credencial ao outro.
+
+Na tela Intenções, selecione o provedor Techify e um dos cinco modelos confirmados:
+- `perplexity/pplx-decider-flash-v1.2` — Perplexity Decider Flash V1.2.
+- `perplexity/pplx-decider-v1.2` — Perplexity Decider V1.2.
+- `typesafe/jev-1.14` — TypeSafe Jev 1.14.
+- `google/gemini-decision-1` — Google Gemini Decision 1.
+- `openai/gpt-6-luna-decisions` — OpenAI GPT-6 Luna Decisions.
+
+A credencial **Techify** existente nas Configurações do WhatsBot é reutilizada somente no proxy da instalação. Não precisa de segunda chave. Para esse provedor, o painel não permite alterar a URL; o destino vem de `LLM_API_BASE_URL` da instalação. Com o padrão `https://llm.techify.one/api/v1`, a classificação usa **POST `/api/alpha/decisions`**, nunca `/chat/completions`. São perguntas Choice/Noul estruturadas, não atendimento conversacional. Não são ativados extras de busca ou outras opções pagas.
+
+`GET /api/intents/models` consulta o catálogo autenticado Techify com `output_modalities=decisions`. Só libera os IDs acima quando o catálogo também anuncia saída Decisions e endpoint compatível. A consulta GET não executa inferência. O cache é separado por credencial/destino, dura cinco minutos e não mantém disponibilidade vencida em caso de erro. Sem chave, rede, modelo ou contrato compatível, a interface explica o bloqueio; ativação e inferência falham fechadas, sem troca automática.
+
+A listagem no catálogo confirma a presença anunciada, não uma inferência bem-sucedida em produção. Salvar a escolha não faz chamada paga. “Testar sem executar” chama o modelo salvo e pode consumir créditos; fica bloqueado enquanto houver seleção não salva. Depois de salvar, teste com um exemplo e revise os diagnósticos antes de ativar para contatos reais.
+
+Preços só são exibidos quando retornados pelo catálogo, em USD/token. São metadados do catálogo, não promessa da cobrança final Techify; não há preço fixo inventado. A estimativa usa esses metadados quando válidos; se ausentes, a reserva conservadora de orçamento permanece estimativa, não cotação. Retenção/processamento de dados varia por fornecedor: revise os termos da Techify e do modelo escolhido antes de habilitar conversas sensíveis.
+
+A API Alpha pode mudar. Resposta recusada, tipo inesperado, HTTP inválido e modelo removido não autorizam tarefa. IDs internos de opções são aliases neutros (`intent_0`, etc.), remapeados no backend: o sanitizador do proxy pode remover chaves como `cost`, e isso não pode apagar probabilidades de intenções com esses nomes.
+
+Fontes oficiais: [contrato Decisions](https://openrouter.ai/docs/api/api-reference/alphadecisions/submit-a-decisions-request), [guia](https://openrouter.ai/docs/guides/features/decisions), [catálogo filtrado](https://openrouter.ai/api/v1/models?output_modalities=decisions). O código do proxy Techify foi inspecionado no repositório `Techify-one/llm-proxy`: encaminha o caminho/corpo, valida credencial Techify e substitui pela credencial upstream internamente. Isso não equivale a uma verificação de inferência no deployment. Não foi feita chamada paga nesta implementação.
+
+---
+
 # Modo assistido por intenções
 
 ## Decisão arquitetural
@@ -22,13 +47,13 @@ A referência **Jev da TypeSafe AI** foi confirmada em documentação oficial: [
 
 | Alternativa | Avaliação |
 | --- | --- |
-| Jev | Classificação especializada com probabilidades e saída estruturada; adaptador padrão. O preço oficial consultado de US$0,042/milhão de tokens de entrada e saída gratuita serve apenas como estimativa, não garantia contratual. |
+| Jev | Classificação especializada com probabilidades e saída estruturada; adaptador padrão na v0.3.0, agora opção legada direta. O preço oficial consultado de US$0,042/milhão de tokens de entrada e saída gratuita serve apenas como estimativa, não garantia contratual. |
 | LLM pequeno com JSON Schema | Flexível para contexto e português informal; adaptador alternativo compatível com Chat Completions. Custo, latência e qualidade variam por modelo. |
 | Classificador local treinado / regras | Privacidade e custo marginal favoráveis; exigiria corpus rotulado PT-BR, manutenção de treinamento e avaliação que este projeto não possui. Não adotado como padrão. |
 
 Não foi executado benchmark próprio de precisão em português, negação ou mensagens informais. Probabilidade/confiança do provedor não é garantia de acerto. A janela inclui mensagens do contato e do proprietário para reduzir pendências já resolvidas. Use testes representativos antes de habilitar, mantendo escopos restritos e aprovação humana. Não há fallback pago silencioso. A interface `Classifier.classify` permite trocar o adaptador sem mudar o orquestrador.
 
-## Configurar pela interface
+## Configuração legada pela interface (Jev direto / LLM JSON)
 
 1. Atualize a instalação pelo procedimento normal do projeto, preservando o diretório de dados e fazendo backup antes da migração.
 2. Abra engrenagem → **Intenções** (`/intents`). A atualização preserva o modo automático anterior quando já usado; o novo modo assistido e novas intenções não são ativados automaticamente.

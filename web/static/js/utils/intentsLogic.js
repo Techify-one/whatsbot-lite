@@ -26,3 +26,29 @@ export function availableTools(catalog, selected) {
   return [...catalog, ...selected.filter(n => !names.has(n)).map(name => ({name, label:name, plugin_id:'indisponível', available:false}))];
 }
 export const taskLabels = {monitoring:'Monitorando',detected:'Intenção detectada',validating:'Validando',executing:'Executando',completed:'Concluída',cancelled:'Cancelada',expired:'Expirada',transferred:'Transferida',failed:'Falhou',paused:'Pausada',waiting_owner:'Aguardando proprietário',waiting_contact:'Aguardando contato'};
+
+export const TECHIFY_DECISION_MODELS = Object.freeze([
+  'perplexity/pplx-decider-flash-v1.2',
+  'perplexity/pplx-decider-v1.2',
+  'typesafe/jev-1.14',
+  'google/gemini-decision-1',
+  'openai/gpt-6-luna-decisions',
+]);
+export function decisionModels(catalog) {
+  const entries = Array.isArray(catalog?.models) ? catalog.models : [];
+  return TECHIFY_DECISION_MODELS.map(id => {
+    const entry = entries.find(model => model.id === id);
+    return {id, name:entry?.name || id, available:catalog?.available === true && entry?.available === true,
+      pricing:entry?.pricing ?? null};
+  });
+}
+export function classifierPayload(settings, key='', removeKey=false) {
+  const fields = ['mode','provider','model','context_limit','timeout_seconds','max_calls_per_minute','daily_budget_usd','human_priority','ambiguity_margin'];
+  const payload = Object.fromEntries(fields.filter(k => settings[k] !== undefined).map(k => [k,settings[k]]));
+  if (settings.provider !== 'techify_decisions') {
+    if(settings.base_url !== undefined) payload.base_url = settings.base_url;
+    if(key) payload.api_key = key;
+    if(removeKey) payload.clear_api_key = true;
+  }
+  return payload;
+}

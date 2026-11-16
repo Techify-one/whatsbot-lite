@@ -19,6 +19,7 @@ class Classification:
     reason: str = "no_match"
     usage: dict = field(default_factory=dict)
     estimated_cost_usd: float = 0.0
+    cost_estimate_available: bool = True
 
 
 class Classifier(Protocol):
@@ -86,13 +87,18 @@ class ProviderClassifier:
         state = {"conversation": bounded_context(context, int(config.get("context_limit", 20))),
                  "eligible_intents": [_spec(i) for i in intents]}
         provider = config.get("provider", "jev")
-        if provider == "jev":
-            url = "https://api.typesafe.ai/v1/systemone"
+        aliases = {"intent_"+str(index):str(i["id"]) for index,i in enumerate(intents)}
+        catalog_model = None
+        if provider == "techify_decisions":
+            from agent.intent_catalog import require_model, proxy_urls
+            catalog_model = await require_model(self.api_key, config.get("model", ""), transport=self.transport)
+        if provider in {"jev", "techify_decisions"}:
+            url = proxy_urls()[1] if provider == "techify_decisions" else "https://api.typesafe.ai/v1/systemone"
             payload = {
                 "model": config.get("model") or "jev-1.14.0", "state": state,
                 "questions": {
                     "intent": {"type": "choice", "instructions": _INSTRUCTIONS,
-                               "criteria": {str(i["id"]): str(i.get("description") or i.get("name")) for i in intents}},
+                               "criteria": {(next(a for a,id in aliases.items() if id==str(i["id"])) if provider=="techify_decisions" else str(i["id"])): str(i.get("description") or i.get("name")) for i in intents}},
                     "actionable": {"type": "noul", "instructions": _INSTRUCTIONS +
                                    " Existe um pedido atual não resolvido que pertence claramente a uma intenção elegível?"},
                 },
@@ -127,9 +133,11 @@ class ProviderClassifier:
             if response.status_code >= 300:
                 raise RuntimeError(f"classifier_http_{response.status_code}")
             result = response.json()
-        if provider == "jev":
+        if provider in {"jev", "techify_decisions"}:
             answers = result.get("answers") or {}
             item = answers.get("intent") or {}
+            if provider == "techify_decisions" and (item.get("type") != "choice" or (answers.get("actionable") or {}).get("type") != "noul"):
+                return Classification(reason="provider_refused_or_invalid_type")
             # NOUL is a numeric yes probability. Unknown values abstain.
             actionable_value = (answers.get("actionable") or {}).get("noul")
             actionable = _probability(actionable_value) >= 0.9
@@ -138,6 +146,7 @@ class ProviderClassifier:
             if not isinstance(probabilities, dict):
                 probabilities = {}
             confidence = min(_probability(probabilities.get(chosen)), _probability(item.get("confidence")))
+            if provider == "techify_decisions": chosen = aliases.get(chosen)
             ranked = sorted((_probability(p) for p in probabilities.values()), reverse=True)
             ambiguous = len(ranked) > 1 and ranked[0] - ranked[1] < float(config.get("ambiguity_margin", 0.15))
         else:
@@ -155,8 +164,19 @@ class ProviderClassifier:
         input_price = float(config.get("input_price_per_million", 0.042 if provider == "jev" else 1.0))
         output_price = float(config.get("output_price_per_million", 0.0 if provider == "jev" else 5.0))
         estimate = (input_tokens * input_price + output_tokens * output_price) / 1_000_000
+        cost_estimate_available = True
+        if provider == "techify_decisions":
+            # Catalog rates are an estimate, not a promise of final Techify billing.
+            pricing = catalog_model.get("pricing", {})
+            try:
+                prompt_price, completion_price = float(pricing["prompt"]), float(pricing["completion"])
+                if not all(math.isfinite(p) and p >= 0 for p in (prompt_price, completion_price)): raise ValueError()
+                estimate = input_tokens * prompt_price + output_tokens * completion_price
+            except (KeyError, TypeError, ValueError):
+                estimate = 0.0
+                cost_estimate_available = False  # Unknown, NOT free; budget reservation is separate.
         decision = Classification(usage={"input_tokens": input_tokens, "output_tokens": output_tokens},
-                                  estimated_cost_usd=estimate, confidence=confidence, candidate_id=str(chosen) if intent else None,
+                                  estimated_cost_usd=estimate, cost_estimate_available=cost_estimate_available, confidence=confidence, candidate_id=str(chosen) if intent else None,
                                   actionable=actionable, ambiguous=ambiguous)
         if not intent:
             decision.reason = "unknown_intent"

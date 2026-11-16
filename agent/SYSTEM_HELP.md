@@ -414,3 +414,6 @@ Em **Nova intenção**, preencha nome, identificador, descrição, exemplos posi
 Para agendar reuniões, instale/configure um plugin real de calendário e associe as ferramentas de disponibilidade e criação. Sem integração, o sistema não pode consultar horários nem criar eventos e não deve afirmar que agendou. Nenhum calendário nativo é instalado automaticamente por esta funcionalidade.
 
 Em Intenções, “Últimas decisões silenciosas” mostra classificações/abstenções e falhas recentes sem texto privado das mensagens. Resultado externo incerto mantém a conversa bloqueada; verifique na integração antes de confirmar reconciliação e cancelar/transferir.
+
+### Classificadores Techify Decisions (v0.3.1)
+Na tela Intenções, Techify · Decisions reutiliza a credencial Techify das Configurações. Selecione Decider Flash V1.2, Decider V1.2, Jev1.14, Gemini Decision1 ou GPT-6 Luna Decisions quando disponível no catálogo autenticado. Não pede outra chave. Usa API Decisions pelo proxy, não chat/completions. Salve antes de testar; teste pode consumir crédito. Configurações legadas permanecem intactas. Falha ou indisponibilidade não troca modelo automaticamente.

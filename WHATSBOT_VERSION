@@ -1,6 +1,10 @@
 {
-  "version": "0.3.0",
+  "version": "0.3.1",
   "changelog": [
+    {
+      "version": "0.3.1",
+      "description": "- Seleção de cinco classificadores Decisions confirmados pelo proxy Techify, reutilizando a credencial Techify já configurada\n- Decider Flash V1.2, Decider V1.2, Jev 1.14, Gemini Decision 1 e GPT-6 Luna Decisions com catálogo autenticado e disponibilidade explícita\n- API Decisions dedicada, sem chamar esses modelos no chat/completions e sem fallback automático\n- Configurações legadas preservadas; credenciais não são compartilhadas entre provedores; teste bloqueado até salvar a seleção"
+    },
     {
       "version": "0.3.0",
       "description": "- Novo modo Assistido por Intenções, opt-in: monitoramento silencioso e tarefas temporárias autorizadas, sem alterar o atendimento automático existente\n- Tela Intenções com cadastro, edição, ferramentas de plugins, escopos, testes sem ação e histórico\n- Classificador Jev/TypeSafe ou endpoint compatível OpenAI configurável, com chave cifrada, limites e sem fallback pago automático\n- Tarefas persistentes, deduplicação, prioridade humana e aprovação de operações sensíveis\n- Contrato de plugins e modelo de agendamento com configuração pendente até integrar calendário real"

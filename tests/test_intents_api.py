@@ -15,7 +15,7 @@ def env(tmp_path,monkeypatch):
     monkeypatch.setenv('WHATSBOT_INTENT_KEY_FILE',str(tmp_path/'key'))
     class Settings(dict):
         def save(self): pass
-    settings=Settings(auto_reply=False,web_password_hash='protected')
+    settings=Settings(auto_reply=False,web_password_hash='protected',intent_classifier={'provider':'jev','model':'jev-1.14.0','base_url':'https://api.typesafe.ai/v1'})
     handler=SimpleNamespace(api_key='executor',_tool_executors={'calendar_free':(lambda:None,'calendar')},
         _tool_default_labels={},_disabled_tools=set(),intent_tool_metadata={'calendar_free':{'effect':'read','capability':'calendar.availability'}})
     runtime=SimpleNamespace(approve=AsyncMock(),simulate=AsyncMock(return_value={'actionable':False}))
@@ -122,3 +122,31 @@ def test_restart_and_delete_do_not_release_uncertain_operation(env):
     assert repo.active_task('123')['status']=='paused'
     client.delete('/api/intents/meeting')
     assert repo.active_task('123')['payload']['outcome_unknown'] is True
+
+def test_techify_activation_requires_existing_credential_and_verified_catalog(env,monkeypatch):
+    from agent.intent_catalog import DEFAULT_MODEL
+    from agent.intent_config import get_api_key
+    client,settings,_,_=env
+    request={'provider':'techify_decisions','model':DEFAULT_MODEL,'mode':'assisted'}
+    assert client.put('/api/intents/settings',json=request).status_code==400
+    settings['openrouter_api_key']='techify-secret'
+    verify=AsyncMock(return_value={'id':DEFAULT_MODEL})
+    monkeypatch.setattr('agent.intent_catalog.require_model',verify)
+    result=client.put('/api/intents/settings',json=request)
+    assert result.status_code==200,result.text
+    verify.assert_awaited_once_with('techify-secret',DEFAULT_MODEL)
+    assert 'techify-secret' not in result.text
+    assert get_api_key(settings)=='techify-secret'
+    assert client.put('/api/intents/settings',json={'clear_api_key':True}).status_code==400
+    # Switching to direct TypeSafe must never reuse the Techify credential.
+    assert client.put('/api/intents/settings',json={'provider':'jev','model':'jev-1.14.0'}).status_code==400
+    verify.side_effect=ValueError('Modelo indisponível')
+    assert client.put('/api/intents/settings',json=request).status_code==400
+
+def test_techify_models_route_is_read_only_and_unavailable_is_explicit(env,monkeypatch):
+    client,settings,_,_=env
+    fetch=AsyncMock(return_value={'models':[],'available':False,'reason':'Sem credencial'})
+    monkeypatch.setattr('agent.intent_catalog.fetch_catalog',fetch)
+    result=client.get('/api/intents/models')
+    assert result.status_code==200 and result.json()['data']['available'] is False
+    fetch.assert_awaited_once_with('')

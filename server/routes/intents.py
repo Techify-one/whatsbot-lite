@@ -2,7 +2,7 @@
 from typing import Any
 import asyncio
 from fastapi import Request
-from agent.intent_config import read_config, mode, get_api_key, set_api_key, validate_config
+from agent.intent_config import read_config, mode, get_api_key, get_legacy_api_key, set_api_key, validate_config
 from agent.intent_schema import validate_definition
 from db.repositories import intent_repo
 from server.helpers import _ok, _err
@@ -24,6 +24,11 @@ def register_routes(app: Any,deps: Any) -> None:
         return _ok({**read_config(settings),"key_configured":bool(get_api_key(settings)),
                     "executor_configured":bool(handler.api_key),"panel_protected":bool(settings.get("web_password_hash",""))})
 
+    @app.get('/api/intents/models')
+    async def models() -> Any:
+        from agent.intent_catalog import fetch_catalog
+        return _ok(await fetch_catalog(settings.get('openrouter_api_key', '')))
+
     @app.put('/api/intents/settings')
     async def put_settings(body:dict) -> Any:
         try:
@@ -31,10 +36,16 @@ def register_routes(app: Any,deps: Any) -> None:
             data=validate_config({**current,**body})
             selected=body.get('mode',mode(settings))
             if selected not in {'disabled','assisted','automatic'}: raise ValueError('Modo inválido.')
-            key=body.get('api_key') or get_api_key(settings)
-            if body.get('clear_api_key'): key=''
+            techify=data['provider']=='techify_decisions'
+            key=settings.get('openrouter_api_key','') if techify else (body.get('api_key') or get_legacy_api_key(settings))
+            if techify and (body.get('api_key') or body.get('clear_api_key')):
+                raise ValueError('A credencial Techify é gerenciada nas Configurações do WhatsBot, não neste campo.')
+            if not techify and body.get('clear_api_key'): key=''
             if selected=='assisted':
-                if not key: raise ValueError('Configure a chave do classificador antes de ativar.')
+                if not key: raise ValueError('Configure a credencial Techify nas Configurações.' if techify else 'Configure a chave do classificador antes de ativar.')
+                if techify:
+                    from agent.intent_catalog import require_model
+                    await require_model(key, data['model'])
                 if not handler.api_key: raise ValueError('Configure o provedor de IA do executor nas configurações.')
                 if not settings.get('web_password_hash',''): raise ValueError('Defina uma senha de painel antes de ativar ações assistidas.')
             if body.get('api_key') or body.get('clear_api_key'): set_api_key(settings,key)

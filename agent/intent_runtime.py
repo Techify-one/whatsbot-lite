@@ -156,7 +156,7 @@ class IntentRuntime:
                 if self._failures>=3: self._open_until=now+60
                 self.repo.append_audit(None,'classification_failed',{'circuit_open':self._failures>=3})
                 return
-            self.repo.append_audit(None,'classification',{'phone':phone,'intent_id':decision.intent_id,'confidence':decision.confidence,'reason':decision.reason,'cost_estimate':decision.estimated_cost_usd,'duration_ms':round((time.time()-now)*1000)})
+            self.repo.append_audit(None,'classification',{'phone':phone,'intent_id':decision.intent_id,'confidence':decision.confidence,'reason':decision.reason,'cost_estimate':decision.estimated_cost_usd if decision.cost_estimate_available else None,'duration_ms':round((time.time()-now)*1000)})
             intent = next((i for i in intents if i['id']==(decision.intent_id or decision.candidate_id)),None)
             if not intent or not decision.actionable: return
             uncertain=decision.ambiguous or decision.confidence<intent.get('min_confidence',.9)

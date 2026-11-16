@@ -2,7 +2,7 @@ import { h } from 'preact';
 import { useEffect, useRef, useState } from 'preact/hooks';
 import htm from 'htm';
 import { authHeaders, handleUnauthorized } from '../services/api.js';
-import { newIntent, normalizeIntent, availableTools, taskLabels } from '../utils/intentsLogic.js';
+import { newIntent, normalizeIntent, availableTools, taskLabels, decisionModels, classifierPayload, TECHIFY_DECISION_MODELS } from '../utils/intentsLogic.js';
 const html = htm.bind(h);
 const fieldClass = 'wa-field w-full border border-wa-border rounded px-3 py-2 text-sm';
 const buttonClass = 'border border-wa-border rounded px-3 py-2 text-sm hover:bg-wa-hover disabled:opacity-50';
@@ -62,12 +62,15 @@ export function IntentsManager() {
   const [intents,setIntents]=useState([]), [tools,setTools]=useState([]), [tasks,setTasks]=useState([]), [decisions,setDecisions]=useState([]);
   const [settings,setSettings]=useState(null), [editor,setEditor]=useState(null), [error,setError]=useState(''), [notice,setNotice]=useState(''), [busy,setBusy]=useState(false);
   const [testText,setTestText]=useState(''), [testPhone,setTestPhone]=useState(''), [testResult,setTestResult]=useState(null);
+  const [catalog,setCatalog]=useState({models:[],available:false,reason:'Catálogo Techify ainda não carregado.'});
+  const providerDrafts=useRef({});
+  const [savedSettings,setSavedSettings]=useState(null);
   const [key,setKey]=useState(''), [removeKey,setRemoveKey]=useState(false);
   const mounted=useRef(true), operation=useRef(false);
   async function refresh(signal) {
-    const [i,t,s,r,d]=await Promise.all([api('', 'GET',undefined,signal),api('/tools','GET',undefined,signal),api('/settings','GET',undefined,signal),api('/tasks','GET',undefined,signal),api('/decisions','GET',undefined,signal)]);
+    const [i,t,s,r,d,m]=await Promise.all([api('', 'GET',undefined,signal),api('/tools','GET',undefined,signal),api('/settings','GET',undefined,signal),api('/tasks','GET',undefined,signal),api('/decisions','GET',undefined,signal),api('/models','GET',undefined,signal).catch(e=>{if(e.name==='AbortError')throw e;return {models:[],available:false,reason:'Não foi possível consultar o catálogo Techify. Tente atualizar novamente.'};})]);
     if(!mounted.current)return;
-    setIntents(i || []);setTools(t || []);setSettings(s);setTasks(r || []);setDecisions(d || []);
+    setIntents(i || []);setTools(t || []);setSettings(s);setSavedSettings(s);setTasks(r || []);setDecisions(d || []);setCatalog(m || {models:[],available:false,reason:'Catálogo Techify indisponível.'});
   }
   useEffect(()=>{mounted.current=true;const controller=new AbortController();refresh(controller.signal).catch(e=>{if(e.name!=='AbortError')setError(e.message);});return()=>{mounted.current=false;controller.abort();};},[]);
   async function run(fn, message) {
@@ -75,7 +78,21 @@ export function IntentsManager() {
     try{await fn();if(mounted.current){await refresh();setNotice(message || 'Salvo.');}}catch(e){if(mounted.current)setError(e.message);}finally{operation.current=false;if(mounted.current)setBusy(false);}
   }
   const changeSetting=(k,v)=>setSettings(s=>({...s,[k]:v}));
-  const saveSettings=()=>run(async()=>{const payload={...settings};delete payload.key_configured;delete payload.available;delete payload.unavailable_reason;delete payload.executor_configured;delete payload.panel_protected;if(key)payload.api_key=key;if(removeKey)payload.clear_api_key=true;await api('/settings','PUT',payload);setKey('');setRemoveKey(false);},'Configuração aplicada.');
+  const techify=settings?.provider==='techify_decisions';
+  const models=decisionModels(catalog);
+  const configDirty=!!settings && JSON.stringify(classifierPayload(settings))!==JSON.stringify(classifierPayload(savedSettings || {}));
+  async function refreshModels() {
+    if(operation.current)return;operation.current=true;setBusy(true);setError('');
+    try{const result=await api('/models');if(mounted.current)setCatalog(result);}catch(e){if(mounted.current)setCatalog({models:[],available:false,reason:'Não foi possível consultar o catálogo Techify. Tente novamente.'});}finally{operation.current=false;if(mounted.current)setBusy(false);}
+  }
+  const selectedModel=models.find(m=>m.id===settings?.model);
+  function changeProvider(provider) {
+    providerDrafts.current[settings.provider]={model:settings.model,base_url:settings.base_url};
+    const defaults=provider==='techify_decisions'?{model:TECHIFY_DECISION_MODELS[0]}:provider==='jev'?{model:'jev-1.14.0',base_url:'https://api.typesafe.ai/v1'}:{model:'',base_url:'https://api.openai.com/v1'};
+    setSettings(s=>({...s,provider,...(providerDrafts.current[provider] || defaults)}));
+    setKey('');setRemoveKey(false);
+  }
+  const saveSettings=()=>run(async()=>{await api('/settings','PUT',classifierPayload(settings,key,removeKey));setKey('');setRemoveKey(false);},'Configuração aplicada.');
   return html`<div class="space-y-5 text-wa-text">
     <p class="text-sm text-wa-secondary">No modo assistido, a IA permanece silenciosa até reconhecer uma intenção habilitada e autorizada. Configurações são aplicadas sem reinício.</p>
     ${error && html`<div role="alert" class="border border-red-400 rounded p-3 text-red-600">${error}</div>`}${notice && html`<p role="status" class="text-wa-teal">${notice}</p>`}
@@ -83,32 +100,39 @@ export function IntentsManager() {
       <h2 class="font-semibold text-lg">Modo e classificador</h2>
       <div class="grid grid-cols-1 md:grid-cols-2 gap-4">
         <label class="block text-sm space-y-1">Modo da IA<select class=${fieldClass} value=${settings.mode || 'disabled'} onChange=${e=>changeSetting('mode',e.target.value)}><option value="disabled">Desativado</option><option value="assisted">Assistido por Intenções</option><option value="automatic">Automático</option></select></label>
-        <label class="block text-sm space-y-1">Provedor<select class=${fieldClass} value=${settings.provider || 'jev'} onChange=${e=>changeSetting('provider',e.target.value)}><option value="jev">Jev · TypeSafe AI</option><option value="openai">LLM com JSON estruturado</option></select></label>
-        <${Field} label="URL HTTPS do provedor" value=${settings.base_url} onChange=${v=>changeSetting('base_url',v)} type="url" />
-        <${Field} label="Modelo" value=${settings.model} onChange=${v=>changeSetting('model',v)} />
-        <${Field} label=${settings.key_configured?'Nova chave (deixe em branco para manter)':'Chave da API'} value=${key} onChange=${setKey} type="password" autocomplete="new-password" />
+        <label class="block text-sm space-y-1">Provedor<select class=${fieldClass} value=${settings.provider || 'techify_decisions'} onChange=${e=>changeProvider(e.target.value)}><option value="techify_decisions">Techify · API Decisions</option><option value="jev">Legado · Jev direto (TypeSafe AI)</option><option value="openai">Legado · LLM com JSON estruturado</option></select></label>
+        ${techify?html`<label class="block text-sm space-y-1">Modelo Decisions<select class=${fieldClass} value=${settings.model || ''} onChange=${e=>changeSetting('model',e.target.value)}>
+          ${!selectedModel && html`<option value=${settings.model || ''} disabled>Modelo salvo não reconhecido: ${settings.model || 'nenhum'}</option>`}
+          ${models.map(model=>html`<option key=${model.id} value=${model.id} disabled=${!model.available}>${model.name} · ${model.id}${model.available?'':' — indisponível'}</option>`)}
+        </select></label>`:html`<${Field} label="URL HTTPS do provedor legado" value=${settings.base_url} onChange=${v=>changeSetting('base_url',v)} type="url" /><${Field} label="Modelo legado" value=${settings.model} onChange=${v=>changeSetting('model',v)} /><${Field} label=${settings.key_configured?'Nova chave legada (deixe em branco para manter)':'Chave da API legada'} value=${key} onChange=${setKey} type="password" autocomplete="new-password" />`}
         <${Field} label="Janela de contexto (mensagens)" value=${settings.context_limit ?? 20} onChange=${v=>changeSetting('context_limit',Number(v))} type="number" min="10" max="50" />
         <${Field} label="Timeout do classificador (segundos)" value=${settings.timeout_seconds ?? 15} onChange=${v=>changeSetting('timeout_seconds',Number(v))} type="number" min="5" max="120" />
         <${Field} label="Máximo de chamadas por minuto" value=${settings.max_calls_per_minute ?? 20} onChange=${v=>changeSetting('max_calls_per_minute',Number(v))} type="number" min="1" />
         <${Field} label="Limite diário estimado (USD)" value=${settings.daily_budget_usd ?? 1} onChange=${v=>changeSetting('daily_budget_usd',Number(v))} type="number" min="0.01" max="100" step="0.01" />
       </div>
+      ${techify && html`<div class="space-y-2 text-sm"><p>API Decisions pelo proxy Techify, usando a credencial Techify já configurada. Não é necessária uma segunda chave. O endereço é gerenciado pela integração.</p>
+        ${!selectedModel?.available && html`<p role="status" class="text-amber-600">${catalog.reason || 'O catálogo Techify não confirmou a disponibilidade deste modelo. Verifique a configuração Techify e atualize o catálogo antes de ativar ou testar.'}</p>`}
+        <button class=${buttonClass} disabled=${busy} onClick=${refreshModels}>Atualizar catálogo</button>
+        ${selectedModel?.pricing!=null?html`<details><summary>Metadados de preço informados pela Techify</summary><pre class="whitespace-pre-wrap break-words text-xs">${JSON.stringify(selectedModel.pricing,null,2)}</pre></details>`:html`<p class="text-wa-secondary">Preço não informado pelo catálogo Techify. Nenhum custo por modelo foi presumido.</p>`}
+      </div>`}
+      ${!techify && html`<p class="text-sm text-wa-secondary">Configuração legada preservada. Mudar para Techify é uma escolha explícita e só entra em vigor ao salvar.</p>`}
       <p class="text-sm text-wa-secondary">A classificação envia ao provedor escolhido apenas a janela de contexto configurada. Não há troca automática de provedor pago. Sem credenciais válidas, não é possível ativar o modo assistido.</p>
-      ${!settings.key_configured && html`<p class="text-sm text-amber-600">Classificador sem chave: salve as credenciais antes de ativar o modo assistido.</p>`}
+      ${!techify && !settings.key_configured && html`<p class="text-sm text-amber-600">Classificador sem chave: salve as credenciais antes de ativar o modo assistido.</p>`}
       ${settings.executor_configured===false && html`<p class="text-sm text-amber-600">Configure o provedor de IA do executor nas Configurações antes de ativar tarefas.</p>`}
       ${settings.panel_protected===false && html`<p class="text-sm text-amber-600">Defina uma senha de acesso ao painel nas Configurações antes de ativar tarefas.</p>`}
       ${settings.unavailable_reason && html`<p role="status" class="text-amber-600">${settings.unavailable_reason}</p>`}
-      ${settings.key_configured && html`<label class="block text-sm"><input type="checkbox" checked=${removeKey} onChange=${e=>setRemoveKey(e.target.checked)} /> Remover a chave salva</label>`}
-      <button class=${buttonClass} disabled=${busy} onClick=${saveSettings}>Salvar configuração</button>
+      ${!techify && settings.key_configured && html`<label class="block text-sm"><input type="checkbox" checked=${removeKey} onChange=${e=>setRemoveKey(e.target.checked)} /> Remover a chave salva</label>`}
+      <button class=${buttonClass} disabled=${busy || (techify && settings.mode==='assisted' && !selectedModel?.available)} onClick=${saveSettings}>Salvar configuração</button>
     </section>`}
     <section class="space-y-3"><div class="flex justify-between gap-2 items-center"><h2 class="font-semibold text-lg">Intenções cadastradas</h2><button class=${buttonClass} disabled=${busy || editor!==null} onClick=${()=>setEditor({})}>Nova intenção</button></div>
       ${editor!==null && html`<${IntentEditor} key=${editor.id || 'new'} initial=${editor} tools=${tools} busy=${busy} onCancel=${()=>setEditor(null)} onSave=${draft=>run(async()=>{await api(editor.id?'/'+encodeURIComponent(editor.id):'',editor.id?'PUT':'POST',draft);setEditor(null);},'Intenção salva.')} />`}
       ${intents.map(intent=>html`<article key=${intent.id} class="border border-wa-border rounded p-3 bg-wa-bg"><div class="flex flex-wrap justify-between gap-2"><div><strong>${intent.name}</strong><p class="text-sm text-wa-secondary">${intent.id} · ${intent.plugin_id?'Plugin '+intent.plugin_id:'Personalizada'} · ${intent.enabled?'Habilitada':'Desabilitada'}</p></div><div class="flex flex-wrap gap-2"><button class=${buttonClass} disabled=${busy || editor!==null} onClick=${()=>setEditor(intent)}>Editar</button><button class=${buttonClass} disabled=${busy} onClick=${()=>run(()=>api('/'+encodeURIComponent(intent.id),'PUT',{...intent,enabled:!intent.enabled}),'Estado atualizado.')}>${intent.enabled?'Desativar':'Ativar'}</button><button class=${buttonClass} disabled=${busy} onClick=${()=>{if(window.confirm('Excluir a intenção '+intent.name+'?'))run(()=>api('/'+encodeURIComponent(intent.id),'DELETE'),'Intenção excluída.');}}>Excluir</button></div></div><p class="text-sm mt-2">${intent.description}</p></article>`)}
       ${!intents.length && html`<p class="text-wa-secondary">Nenhuma intenção cadastrada. Crie uma intenção e associe somente as ferramentas necessárias.</p>`}
     </section>
-    <section class="border border-wa-border rounded-lg p-4 space-y-3 bg-wa-bg"><h2 class="font-semibold text-lg">Teste de classificação</h2><p class="text-sm text-wa-secondary">Não envia mensagens nem executa ferramentas. A consulta ao classificador pode consumir crédito no provedor configurado.</p>
+    <section class="border border-wa-border rounded-lg p-4 space-y-3 bg-wa-bg"><h2 class="font-semibold text-lg">Teste de classificação</h2>${(configDirty || !!key || removeKey) && html`<p role="status" class="text-amber-600">Salve a configuração antes de testar. A simulação usa o provedor e modelo salvos.</p>`}<p class="text-sm text-wa-secondary">Não envia mensagens nem executa ferramentas. A consulta ao classificador pode consumir crédito no provedor configurado.</p>
       <${Field} label="Conversa para testar elegibilidade" value=${testPhone} onChange=${setTestPhone} placeholder="Identificador do contato ou grupo" />
       <${Field} label="Mensagem de exemplo" value=${testText} onChange=${setTestText} multiline />
-      <button class=${buttonClass} disabled=${busy || !testText.trim()} onClick=${()=>run(async()=>setTestResult(await api('/test','POST',{text:testText,phone:testPhone})),'Simulação concluída, sem mensagens ou ferramentas.')}>Testar sem executar</button>
+      <button class=${buttonClass} disabled=${busy || configDirty || !!key || removeKey || !testText.trim() || (techify && !selectedModel?.available)} onClick=${()=>run(async()=>setTestResult(await api('/test','POST',{text:testText,phone:testPhone})),'Simulação concluída, sem mensagens ou ferramentas.')}>Testar sem executar</button>
       ${testResult && html`<pre class="whitespace-pre-wrap break-words text-sm p-3 border border-wa-border rounded" aria-label="Resultado da simulação">${JSON.stringify(testResult,null,2)}</pre>`}
     </section>
     <details class="border border-wa-border rounded p-3"><summary>Últimas decisões silenciosas</summary><pre class="whitespace-pre-wrap break-words text-xs">${JSON.stringify(decisions,null,2)}</pre></details>
